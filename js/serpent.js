@@ -271,13 +271,23 @@ export class Serpent {
     this._up = new THREE.Vector3(0, 1, 0);
   }
 
+  // Lay the body out in a loose curl around a point (used on load).
+  place(center) {
+    this.points.forEach((p, i) => {
+      const a = i * 0.06;
+      p.set(center.x + Math.cos(a) * (1.2 + i * 0.012), center.y, center.z + Math.sin(a) * (1.2 + i * 0.012));
+    });
+  }
+
   // groundWeight: 1 = slithering on a floor (back faces up), 0 = free in the air
   // (back faces the camera).
   update(dt, time, target, camPos, groundWeight = 0) {
     const { points, tangents, normals } = this;
     const to = this._a.subVectors(target, points[0]);
     const dist = to.length();
-    const speed = Math.min(1.6 + dist * 2.0, 30);
+    // cruise gently up close, but cross long distances fast so the body never
+    // lingers as a pole through the frame while the camera changes chapters
+    const speed = dist > 8 ? Math.min(dist * 4.5, 90) : 1.6 + dist * 2.0;
     const desired = to.normalize();
     const view = this._b.subVectors(camPos, points[0]).normalize().lerp(this._up, groundWeight).normalize();
     // lateral undulation: swing the heading side to side around the dorsal axis

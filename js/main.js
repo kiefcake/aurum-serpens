@@ -172,6 +172,10 @@ function frame() {
   const u = pathU(scrollP);
   camPath.getPoint(u, camera.position);
   lookPath.getPoint(u, look);
+  // portrait screens see less horizontally: back the camera off to keep subjects whole
+  if (camera.aspect < 1) {
+    camera.position.sub(look).multiplyScalar(1 + (1 / camera.aspect - 1) * 0.55).add(look);
+  }
   // a touch of parallax from the cursor
   camera.position.x += pointer.ndc.x * 0.6;
   camera.position.y += pointer.ndc.y * 0.35;
@@ -239,6 +243,8 @@ tree.update(0, 0, 1, true);
 sculpture.update(0, 0, true);
 camPath.getPoint(pathU(scrollP), camera.position);
 camera.lookAt(lookPath.getPoint(pathU(scrollP)));
+weights = stationWeights(scrollP);
+serpent.place(idleTarget(0, idle));
 // never let shader compilation hold the loader hostage: cap the wait
 const compiled = renderer.compileAsync(scene, camera).catch(() => {});
 Promise.race([compiled, new Promise((r) => setTimeout(r, 1800))]).then(() => {
