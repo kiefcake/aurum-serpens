@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { BUMP, patch } from './studio.js';
+import { createHead, EYE_POSITIONS, SNOUT } from './serpentHead.js';
 
 // The serpent is a follow-the-leader spine simulated on the CPU. Each frame the
 // spine (position, tangent, dorsal normal) is packed into a float texture and a
@@ -17,12 +18,12 @@ const SIDES = 36;
 
 const bump = (x, c, w) => Math.exp(-(((x - c) / w) ** 2));
 const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0), 1); return t * t * (3 - 2 * t); };
-// Mirrors profile() in the shader; used to seat the eyes.
+// Mirrors profile() in the shader. The front of the tube is a slim neck that
+// disappears inside the sculpted head mesh.
 function profile(u) {
-  return RADIUS * Math.sqrt(smooth(0, 0.028, u)) * (1 + 0.32 * bump(u, 0.04, 0.022)) *
-    (1 - 0.22 * bump(u, 0.088, 0.02)) * Math.pow(1 - u, 0.8) * (0.86 + 0.22 * bump(u, 0.36, 0.25));
+  return RADIUS * Math.sqrt(smooth(0, 0.05, u)) * (0.75 + 0.25 * smooth(0.03, 0.12, u)) *
+    Math.pow(1 - u, 0.8) * (0.86 + 0.22 * bump(u, 0.36, 0.25));
 }
-const flatness = (u) => 0.58 + (0.86 - 0.58) * smooth(0.02, 0.13, u);
 
 const VERT_HEAD = /* glsl */ `
 uniform sampler2D uSpine;
@@ -39,8 +40,8 @@ vec3 fetchRow(int row, float u){
 }
 float bumpf(float x, float c, float w){ float d = (x - c) / w; return exp(-d * d); }
 float profile(float u){
-  return uR * sqrt(smoothstep(0.0, 0.028, u)) * (1.0 + 0.32 * bumpf(u, 0.04, 0.022))
-       * (1.0 - 0.22 * bumpf(u, 0.088, 0.02)) * pow(1.0 - u, 0.8) * (0.86 + 0.22 * bumpf(u, 0.36, 0.25));
+  return uR * sqrt(smoothstep(0.0, 0.05, u)) * (0.75 + 0.25 * smoothstep(0.03, 0.12, u))
+       * pow(1.0 - u, 0.8) * (0.86 + 0.22 * bumpf(u, 0.36, 0.25));
 }
 `;
 
@@ -72,7 +73,7 @@ ${BUMP}
 
 const FRAG_SURFACE = /* glsl */ `
   float along = vSUv.x;
-  float head = smoothstep(0.1, 0.06, along);
+  float head = 0.0;   // the sculpted head mesh covers the front of the tube
   float rowsN = mix(130.0, 80.0, head);
   float aroundN = mix(14.0, 11.0, head);
   vec2 g = vec2(vSUv.y * aroundN, along * rowsN);
@@ -124,7 +125,9 @@ const FRAG_SURFACE = /* glsl */ `
 const eyeVertex = /* glsl */ `
 varying vec3 vN;
 varying vec3 vV;
+varying vec3 vP;
 void main(){
+  vP = position / 0.058;
   vec4 mv = modelViewMatrix * vec4(position, 1.0);
   vN = normalize(normalMatrix * normal);
   vV = -mv.xyz;
@@ -134,11 +137,18 @@ void main(){
 const eyeFragment = /* glsl */ `
 varying vec3 vN;
 varying vec3 vV;
+varying vec3 vP;
 void main(){
   vec3 n = normalize(vN), v = normalize(vV);
   float ndv = max(dot(n, v), 0.0);
-  vec3 col = mix(vec3(0.0, 0.25, 0.1), vec3(0.2, 2.4, 0.9), pow(ndv, 3.0));
-  col += vec3(3.0) * pow(max(dot(reflect(-v, n), normalize(vec3(0.3, 1.0, 0.4))), 0.0), 60.0);
+  // deep emerald iris lit from within, a gold ring, and a vertical slit pupil
+  float out_ = abs(vP.x);
+  float iris = smoothstep(0.2, 0.9, out_);
+  vec3 col = mix(vec3(0.0, 0.05, 0.02), vec3(0.05, 0.75, 0.3), iris * (0.4 + 0.6 * ndv));
+  col += vec3(1.2, 0.75, 0.2) * smoothstep(0.55, 0.62, out_) * (1.0 - smoothstep(0.62, 0.7, out_)) * 0.6;
+  float slit = (1.0 - smoothstep(0.1, 0.18, abs(vP.z) / (0.35 + 0.65 * (1.0 - abs(vP.y))))) * step(0.5, out_);
+  col = mix(col, vec3(0.0), slit);
+  col += vec3(2.5) * pow(max(dot(reflect(-v, n), normalize(vec3(0.3, 1.0, 0.4))), 0.0), 120.0);
   gl_FragColor = vec4(col, 1.0);
 }
 `;
@@ -230,19 +240,25 @@ export class Serpent {
     this.mesh.frustumCulled = false;
     scene.add(this.mesh);
 
-    // emerald cabochon eyes
-    const eyeGeo = new THREE.SphereGeometry(0.05, 24, 16);
+    // sculpted head, carrying the emerald cabochon eyes and the tongue
+    this.head = createHead();
+    scene.add(this.head);
+    const eyeGeo = new THREE.SphereGeometry(0.058, 32, 24);
     const eyeMat = new THREE.ShaderMaterial({ vertexShader: eyeVertex, fragmentShader: eyeFragment });
-    this.eyes = [new THREE.Mesh(eyeGeo, eyeMat), new THREE.Mesh(eyeGeo, eyeMat)];
-    this.eyes.forEach((e) => { e.scale.set(1, 0.8, 1.35); scene.add(e); });
+    EYE_POSITIONS.forEach((p) => {
+      const e = new THREE.Mesh(eyeGeo, eyeMat);
+      e.position.copy(p);
+      e.scale.set(0.8, 0.8, 1.25);
+      e.rotation.y = Math.sign(p.x) * 0.35;
+      this.head.add(e);
+    });
 
-    // forked tongue
     this.tongueGeo = new THREE.BufferGeometry();
     this.tongueGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6 * 3), 3));
     this.tongue = new THREE.LineSegments(this.tongueGeo,
       new THREE.LineBasicMaterial({ color: new THREE.Color(1.6, 0.08, 0.08) }));
     this.tongue.frustumCulled = false;
-    scene.add(this.tongue);
+    this.head.add(this.tongue);
 
     // gold dust shed from the scales
     this.dustCount = 700;
@@ -335,25 +351,24 @@ export class Serpent {
 
   _placeHead(time) {
     const P = new THREE.Vector3(), T = new THREE.Vector3(), Nn = new THREE.Vector3(), B = new THREE.Vector3();
-    const u = 0.032;
-    this._frameAt(u, P, T, Nn, B);
-    const r = profile(u);
-    const m = new THREE.Matrix4().makeBasis(B, Nn, T);
-    this.eyes.forEach((e, k) => {
-      e.position.copy(P).addScaledVector(Nn, r * flatness(u) * 0.55).addScaledVector(B, (k ? 1 : -1) * r * 0.66);
-      e.quaternion.setFromRotationMatrix(m);
-    });
+    this._frameAt(0, P, T, Nn, B);
+    // right-handed basis: x = N × T, y = dorsal, z = forward
+    const X = new THREE.Vector3().crossVectors(Nn, T);
+    this.head.position.copy(P);
+    this.head.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Nn, T));
+    // the head is held a little proud of the body and tastes the air as it goes
+    this.head.rotateX(-0.1 + Math.sin(time * 1.3) * 0.04);
+    this.head.rotateY(Math.sin(time * 0.9) * 0.06);
 
-    const nose = new THREE.Vector3();
-    this._frameAt(0, nose, T, Nn, B);
     const flick = Math.max(0, Math.sin(time * 5.5)) * (Math.sin(time * 0.9) > 0.2 ? 1 : 0);
-    const len = 0.32 * flick;
+    const len = 0.34 * flick;
+    const wob = Math.sin(time * 40) * 0.025 * flick;
+    const root = SNOUT.clone().setZ(SNOUT.z - 0.06);
+    const mid = SNOUT.clone().setZ(SNOUT.z + len * 0.65);
+    const tipA = mid.clone().add(new THREE.Vector3(0.05 * flick + wob, -0.01, len * 0.35));
+    const tipB = mid.clone().add(new THREE.Vector3(-0.05 * flick + wob, -0.01, len * 0.35));
     const arr = this.tongueGeo.attributes.position.array;
-    const mid = nose.clone().addScaledVector(T, len * 0.65);
-    const wob = Math.sin(time * 40) * 0.03 * flick;
-    const tipA = mid.clone().addScaledVector(T, len * 0.35).addScaledVector(B, 0.05 * flick + wob);
-    const tipB = mid.clone().addScaledVector(T, len * 0.35).addScaledVector(B, -0.05 * flick + wob);
-    [nose, mid, mid, tipA, mid, tipB].forEach((v, i) => v.toArray(arr, i * 3));
+    [root, mid, mid, tipA, mid, tipB].forEach((v, i) => v.toArray(arr, i * 3));
     this.tongueGeo.attributes.position.needsUpdate = true;
   }
 
