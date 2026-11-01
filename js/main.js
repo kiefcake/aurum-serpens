@@ -61,7 +61,7 @@ function buildRig() {
   const [t0, t1] = anchors.tree;
   for (let i = 0; i <= 4; i++) {
     const a = -0.35 + (i / 4) * 2.2;
-    const r = 22 - i * 1.8;
+    const r = 25 - i * 1.3;
     keys.push([t0 + (t1 - t0) * (i / 4),
       [T.x + Math.sin(a) * r, T.y + 6 + i * 1.2, T.z + Math.cos(a) * r],
       [T.x, T.y + 6.5 + i * 0.4, T.z]]);
@@ -206,9 +206,7 @@ function resize() {
 }
 addEventListener('resize', resize);
 
-const ui = initUI();
-window.__aurum = { camera, sculpture, tree, serpent, get p() { return scrollP; }, get anchors() { return anchors; } };
-resize();
+const ui = initUI();resize();
 scrollP = prevP = scrollTarget;
 
 // compile every program up front so the loader hides real work, not a stutter
