@@ -68,7 +68,7 @@ void main(){
   float f = fbm(vW * vec3(2.4, 0.5, 2.4));
   float ridge = abs(sin(f * 16.0));
   vec3 bark = mix(vec3(0.025, 0.016, 0.01), vec3(0.17, 0.09, 0.035), ridge);
-  float vein = smoothstep(0.07, 0.0, abs(fbm(vW * 1.1 + 3.0) - 0.5));
+  float vein = smoothstep(0.022, 0.0, abs(fbm(vW * 1.1 + 3.0) - 0.5));
   float diff = max(dot(n, L), 0.0) * 0.85 + 0.15;
   vec3 env = studioEnv(reflect(-V, n));
   vec3 gold = ${GOLD};
@@ -206,7 +206,7 @@ void main(){
   float marble = fbm(vec3(q * 6.0, 1.0));
   vec3 col = mix(vec3(0.012, 0.01, 0.009), vec3(0.05, 0.04, 0.035), marble) * uTint;
   // engraved gold rings
-  float rings = smoothstep(0.012, 0.0, abs(fract(r * 6.0) - 0.5) - 0.48) * step(r, 0.84);
+  float rings = smoothstep(0.475, 0.495, abs(fract(r * 6.0) - 0.5)) * step(r, 0.84);
   float ang = atan(q.y, q.x);
   float ticks = step(0.92, fract(ang * 36.0 / 6.2831)) * step(0.7, r) * step(r, 0.78);
   float glow = 0.6 + 0.4 * sin(uTime * 1.5 - r * 12.0);

@@ -35,7 +35,7 @@ const serpent = new Serpent(scene);
 
 const composer = new EffectComposer(renderer);
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.85, 0.65, 0.82);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.7, 0.6, 0.92);
 composer.addPass(bloom);
 const lens = new ShaderPass(FinalShader);
 composer.addPass(lens);
@@ -67,9 +67,9 @@ function buildRig() {
       [T.x, T.y + 6.5 + i * 0.4, T.z]]);
   }
   const [s0, s1] = anchors.sculpture;
-  keys.push([s0, [S.x - 1.5, S.y + 1.2, S.z + 10], [S.x, S.y - 0.4, S.z]]);
-  keys.push([s0 + (s1 - s0) * 0.5, [S.x + 3.5, S.y + 0.6, S.z + 6.5], [S.x, S.y + 0.1, S.z]]);
-  keys.push([s1, [S.x + 1.2, S.y + 2.5, S.z + 5.2], [S.x, S.y + 0.2, S.z]]);
+  keys.push([s0, [S.x - 1.5, S.y + 1.0, S.z + 10.5], [S.x, S.y - 0.9, S.z]]);
+  keys.push([s0 + (s1 - s0) * 0.5, [S.x + 3.0, S.y + 0.4, S.z + 7.5], [S.x, S.y - 0.7, S.z]]);
+  keys.push([s1, [S.x + 0.8, S.y + 2.2, S.z + 6.4], [S.x, S.y - 0.6, S.z]]);
   keys.push([1, [S.x, S.y + 20, S.z + 34], [S.x, S.y + 8, S.z]]);
 
   keyP = keys.map((k) => k[0]);
@@ -152,16 +152,22 @@ function frame() {
   const t = clock.elapsedTime;
 
   scrollP += (scrollTarget - scrollP) * (1 - Math.exp(-dt * 4.5));
-  velocity += ((scrollP - prevP) / Math.max(dt, 1e-3) * 4 - velocity) * (1 - Math.exp(-dt * 8));
+  velocity += ((scrollP - prevP) / Math.max(dt, 1e-3) * 2.5 - velocity) * (1 - Math.exp(-dt * 8));
   prevP = scrollP;
   weights = stationWeights(scrollP);
 
   const u = pathU(scrollP);
-  camPath.getPointAt(u, camera.position);
-  lookPath.getPointAt(u, look);
+  camPath.getPoint(u, camera.position);
+  lookPath.getPoint(u, look);
   // a touch of parallax from the cursor
   camera.position.x += pointer.ndc.x * 0.6;
   camera.position.y += pointer.ndc.y * 0.35;
+  // push the subject away from the chapter copy (tree copy is left, sculpture copy right)
+  if (innerWidth > 720) {
+    const shift = (-0.16 * weights.tree + 0.2 * weights.sculpture) * camera.position.distanceTo(look);
+    tmp.subVectors(look, camera.position).cross(camera.up).normalize();
+    look.addScaledVector(tmp, shift);
+  }
   camera.lookAt(look);
 
   // serpent target: blend between the cursor and its own wandering
@@ -201,12 +207,15 @@ function resize() {
 addEventListener('resize', resize);
 
 const ui = initUI();
+window.__aurum = { camera, sculpture, tree, serpent, get p() { return scrollP; }, get anchors() { return anchors; } };
 resize();
 scrollP = prevP = scrollTarget;
 
 // compile every program up front so the loader hides real work, not a stutter
 tree.update(0, 0, 1, true);
 sculpture.update(0, 0, true);
+camPath.getPoint(pathU(scrollP), camera.position);
+camera.lookAt(lookPath.getPoint(pathU(scrollP)));
 renderer.compileAsync(scene, camera).catch(() => {}).finally(() => {
   composer.render(0);
   ui.ready();

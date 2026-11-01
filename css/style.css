@@ -83,7 +83,11 @@ body.in-tree .ledger { opacity: 1; transform: none; }
 #tree { height: 380vh; }
 #sculpture { height: 280vh; }
 .sticky { position: sticky; top: 0; height: 100vh; display: flex; align-items: center; padding: 0 clamp(16px, 6vw, 96px); }
-.copy { max-width: 430px; }
+.copy { max-width: 430px; position: relative; text-shadow: 0 2px 18px rgba(0, 0, 0, 0.85); }
+.copy::before {
+  content: ''; position: absolute; inset: -30% -40%; z-index: -1;
+  background: radial-gradient(closest-side, rgba(3, 4, 3, 0.62), transparent);
+}
 .copy.right { margin-left: auto; text-align: right; }
 .copy p:not(.eyebrow):not(.mono) { color: var(--muted); line-height: 1.75; font-size: 15px; margin-top: 22px; }
 

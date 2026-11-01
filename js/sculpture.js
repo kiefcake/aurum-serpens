@@ -22,6 +22,8 @@ const fragment = /* glsl */ `
 uniform float uTime;
 uniform float uSpin;
 uniform mat4 uInvModel;
+uniform mat4 uModel;
+uniform mat4 uProj;
 uniform vec3 uHalf;
 uniform vec3 uLight;
 varying vec3 vWorld;
@@ -35,7 +37,7 @@ float sdEllipsoid(vec3 p, vec3 r){ float k0 = length(p / r); float k1 = length(p
 float smin(float a, float b, float k){ float h = clamp(0.5 + 0.5 * (b - a) / k, 0.0, 1.0); return mix(b, a, h) - k * h * (1.0 - h); }
 
 vec3 toSnake(vec3 p){
-  vec3 s = p - vec3(0.0, 0.35, 0.0);
+  vec3 s = p - vec3(0.0, -0.22, 0.0);
   s.xz = rot(uSpin) * s.xz;
   s.yz = rot(0.42) * s.yz;
   return s;
@@ -169,9 +171,9 @@ void main(){
   float fres = pow(1.0 - max(dot(n, V), 0.0), 5.0);
   vec3 sky = vec3(0.55, 0.58, 0.66);
 
-  vec3 col = marble * (diff * vec3(1.15, 1.05, 0.95) + sky * 0.28 * ao * (0.6 + 0.4 * n.y));
-  col += marble * vec3(1.0, 0.72, 0.5) * wrap * thin * 0.35;
-  col += spec * 0.5 + fres * sky * 0.25 * ao;
+  vec3 col = marble * (diff * vec3(0.78, 0.72, 0.66) + sky * 0.16 * ao * (0.5 + 0.5 * n.y));
+  col += marble * vec3(0.9, 0.6, 0.4) * wrap * thin * 0.28;
+  col += spec * 0.45 + fres * sky * 0.18 * ao;
 
   vec3 g = ${GOLD};
   vec3 goldCol = g * studioEnv(reflect(rd, n)) * 0.9 + g * diff * 0.6;
@@ -180,7 +182,7 @@ void main(){
   if (m > 1.5) col = vec3(3.5, 0.15, 0.08) * (0.6 + 0.4 * max(dot(n, V), 0.0)) + spec;
 
   gl_FragColor = vec4(col, 1.0);
-  vec4 clip = projectionMatrix * viewMatrix * (modelMatrix * vec4(p, 1.0));
+  vec4 clip = uProj * viewMatrix * (uModel * vec4(p, 1.0));
   gl_FragDepth = (clip.z / clip.w) * 0.5 + 0.5;
 }
 `;
@@ -208,7 +210,7 @@ void main(){
   vec3 V = normalize(cameraPosition - vW);
   float edge = pow(abs(dot(normalize(vN), V)), 2.5);
   float motes = 0.7 + 0.3 * vnoise(vec3(vW.xz * 3.0, vW.y * 2.0 + uTime * 0.4));
-  float a = edge * (1.0 - vH) * smoothstep(0.0, 0.15, vH) * motes * 0.16 * uOpacity;
+  float a = edge * (1.0 - vH) * smoothstep(0.0, 0.15, vH) * motes * 0.075 * uOpacity;
   gl_FragColor = vec4(vec3(1.0, 0.93, 0.8) * a, 1.0);
 }
 `;
@@ -224,6 +226,8 @@ export class Sculpture {
       uTime: { value: 0 },
       uSpin: { value: 0 },
       uInvModel: { value: new THREE.Matrix4() },
+      uModel: { value: new THREE.Matrix4() },
+      uProj: { value: new THREE.Matrix4() },
       uHalf: { value: HALF },
       uLight: { value: new THREE.Vector3(0.45, 0.9, 0.35).normalize() },
     };
@@ -234,6 +238,7 @@ export class Sculpture {
       uniforms: this.uniforms,
       side: THREE.BackSide,
     }));
+    this.proxy.onBeforeRender = (r, s, camera) => this.uniforms.uProj.value.copy(camera.projectionMatrix);
     this.group.add(this.proxy);
 
     this.shaftUniforms = { uTime: { value: 0 }, uOpacity: { value: 1 } };
@@ -277,6 +282,7 @@ export class Sculpture {
     this.rotation += this.velocity * dt;
     this.group.rotation.y = this.rotation;
     this.group.updateMatrixWorld();
+    this.uniforms.uModel.value.copy(this.group.matrixWorld);
     this.uniforms.uInvModel.value.copy(this.group.matrixWorld).invert();
     this.uniforms.uTime.value = time;
     this.uniforms.uSpin.value = time * 0.08;
