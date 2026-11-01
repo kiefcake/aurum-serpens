@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Aurum Serpens</title>
+  <meta name="description" content="A real-time WebGL study in avarice: a gilded serpent, a money tree that grows as you scroll, and a raymarched marble ouroboros mended with gold." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,500;1,300;1,400&family=JetBrains+Mono:wght@300;400&family=Manrope:wght@300;400;500&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <canvas id="gl"></canvas>
+
+  <div class="loader">
+    <div class="loader-mark">
+      <span class="loader-word">Aurum</span>
+      <span class="loader-count">000</span>
+    </div>
+    <div class="loader-line"></div>
+    <p class="loader-note">Casting gold&nbsp;·&nbsp;carving marble&nbsp;·&nbsp;waking the serpent</p>
+  </div>
+
+  <header class="nav">
+    <a class="brand" href="#hero">A&nbsp;/&nbsp;S</a>
+    <nav>
+      <a href="#tree">I. Arbor</a>
+      <a href="#sculpture">II. Ouroboros</a>
+      <a href="#outro">Coda</a>
+    </nav>
+  </header>
+
+  <aside class="rail" aria-hidden="true">
+    <div class="rail-track"><div class="rail-fill"></div></div>
+    <span class="rail-dot">0</span><span class="rail-dot">I</span><span class="rail-dot">II</span><span class="rail-dot">∞</span>
+  </aside>
+
+  <div class="ledger">
+    <span class="mono">Coins grown</span>
+    <span class="ledger-count">0000</span>
+    <span class="mono">≈ ¥ <span class="ledger-value">0</span></span>
+  </div>
+
+  <main>
+    <section id="hero" class="panel hero">
+      <p class="eyebrow reveal">A study in avarice — MMXXVI</p>
+      <h1 data-split>Aurum Serpens</h1>
+      <p class="lede reveal">Move to charm the serpent. Be still, and it will find its own way.</p>
+      <div class="hint">move your cursor</div>
+      <div class="scroll-cue"><span></span>scroll</div>
+    </section>
+
+    <section id="tree" class="chapter">
+      <div class="sticky">
+        <div class="copy left">
+          <p class="eyebrow reveal">Chapter I — 摇钱树</p>
+          <h2 data-split>The Money Tree</h2>
+          <p class="reveal">In Han dynasty tombs, bronze trees hung with square-holed coins promised the dead a harvest that would never end. Here one is grown from a single seed, every branch recursive, every coin counted.</p>
+          <p class="reveal mono small">Scroll to grow · click to shake the branches</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="sculpture" class="chapter">
+      <div class="sticky">
+        <div class="copy right">
+          <p class="eyebrow reveal">Chapter II — Ouroboros</p>
+          <h2 data-split>Marble that eats itself</h2>
+          <p class="reveal">Not a single polygon: the serpent and its plinth are signed distance fields, raymarched per pixel, veined with noise and broken along Voronoi seams that have been mended with gold, after the art of kintsugi.</p>
+          <p class="reveal mono small">Drag to turn the sculpture</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="outro" class="panel outro">
+      <h2 data-split>Everything golden devours.</h2>
+      <p class="reveal mono small">Three.js · GLSL · SDF raymarching · GPU-skinned spine · procedural growth</p>
+    </section>
+  </main>
+
+  <div class="cursor"><span class="cursor-label">charm</span></div>
+  <div class="cursor-dot"></div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
