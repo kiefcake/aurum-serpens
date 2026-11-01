@@ -107,18 +107,21 @@ ${BUMP}
 `;
 const BARK_FRAG = /* glsl */ `
   float n1 = fbm(vWPos * 1.3);
-  float n2 = fbm(vWPos * vec3(6.0, 1.4, 6.0));
+  float n2 = fbm(vWPos * vec3(4.0, 1.0, 4.0));
   // verdigris gathers in the bark furrows and in broad weathered patches;
-  // the raised ridges stay rubbed back to bronze
-  float furrow = 1.0 - abs(sin(n2 * 14.0));
-  float patina = clamp(smoothstep(0.5, 0.7, n1) + smoothstep(0.5, 0.95, furrow) * 0.9, 0.0, 1.0);
+  // the raised ridges stay rubbed back to bronze. Grooves narrower than a pixel
+  // fade to their average instead of aliasing into sparkle at a distance.
+  float fq = n2 * 9.0;
+  float aa = 1.0 - smoothstep(0.3, 1.0, fwidth(fq));
+  float furrow = mix(0.36, 1.0 - abs(sin(fq)), aa);
+  float patina = clamp(smoothstep(0.48, 0.7, n1) + smoothstep(0.55, 0.95, furrow) * 0.8, 0.0, 1.0);
   float vein = smoothstep(0.018, 0.0, abs(fbm(vWPos * 0.9 + 3.0) - 0.5)) * (1.0 - patina);
-  vec3 bronze = vec3(0.5, 0.29, 0.14) * (0.8 + 0.4 * n2);
-  vec3 verd = mix(vec3(0.07, 0.26, 0.22), vec3(0.34, 0.6, 0.5), smoothstep(0.3, 0.8, fbm(vWPos * 9.0)));
+  vec3 bronze = vec3(0.56, 0.34, 0.17) * (0.85 + 0.3 * n2);
+  vec3 verd = mix(vec3(0.05, 0.22, 0.19), vec3(0.3, 0.56, 0.47), smoothstep(0.3, 0.8, fbm(vWPos * 3.0 + 5.0)));
   diffuseColor.rgb = mix(mix(bronze, verd, patina), ${GOLD}, vein);
   float sMetal = mix(mix(0.92, 0.0, patina), 1.0, vein);
-  float sRough = mix(mix(0.38, 0.88, patina), 0.14, vein);
-  float sHeight = (1.0 - furrow) * 0.7 + patina * 0.25 - vein * 0.4;
+  float sRough = mix(mix(0.34, 0.85, patina), 0.14, vein);
+  float sHeight = ((1.0 - furrow) * 0.7 + patina * 0.25) * aa - vein * 0.4;
   float pulse = pow(0.5 + 0.5 * sin(vWPos.y * 1.2 - uTime * 2.0), 12.0);
 `;
 

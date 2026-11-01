@@ -30,7 +30,8 @@ void main(){
   float relief = max(rim, frame);
 
   vec3 gold = vec3(0.95, 0.6, 0.24);
-  vec3 col = gold * body * (0.25 + 0.95 * light) * (1.0 + relief * 0.9);
+  // deep terminator so it reads as a lit sphere of metal, not a flat disc
+  vec3 col = gold * body * (0.08 + 1.1 * light * light) * (1.0 + relief * 1.2);
   col *= disc * (1.0 - hole);
 
   // halo and a little drifting haze in front
@@ -40,7 +41,7 @@ void main(){
   col += gold * halo;
   col *= 0.75 + 0.5 * haze;
 
-  gl_FragColor = vec4(col * 0.32 * uOpacity * smoothstep(1.27, 1.2, r), 1.0);
+  gl_FragColor = vec4(col * 0.2 * uOpacity * smoothstep(1.27, 1.2, r), 1.0);
 }
 `;
 

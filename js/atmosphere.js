@@ -22,7 +22,9 @@ void main(){
   float y = vDir.y;
   vec3 col = mix(uHorizon, uTop, smoothstep(0.0, 0.7, y));
   col = mix(col, uBottom, smoothstep(0.0, -0.6, y));
-  float smoke = fbm(vDir * 3.0 + vec3(uTime * 0.02, 0.0, uTime * 0.015));
+  // three octaves are plenty for smoke this dim, and the sky covers every pixel
+  vec3 sp = vDir * 3.0 + vec3(uTime * 0.02, 0.0, uTime * 0.015);
+  float smoke = 0.5 * vnoise(sp) + 0.25 * vnoise(sp * 2.02 + 1.7) + 0.125 * vnoise(sp * 4.04 + 9.2) + 0.0625;
   col *= 0.75 + 0.5 * smoke;
   gl_FragColor = vec4(col, 1.0);
 }
@@ -33,6 +35,7 @@ attribute float aSeed;
 uniform float uTime;
 uniform float uPixel;
 varying float vTw;
+varying float vNear;
 void main(){
   vec3 p = position;
   p.x += sin(uTime * 0.2 + aSeed * 50.0) * 0.6;
@@ -40,15 +43,18 @@ void main(){
   p.z += cos(uTime * 0.17 + aSeed * 17.0) * 0.6;
   vec4 mv = modelViewMatrix * vec4(p, 1.0);
   vTw = 0.4 + 0.6 * pow(0.5 + 0.5 * sin(uTime * (1.0 + aSeed * 2.0) + aSeed * 90.0), 3.0);
-  gl_PointSize = (0.5 + aSeed * 1.2) * uPixel * 45.0 / -mv.z;
+  // motes drifting right past the lens would be huge, overdraw-heavy blurs: cap and fade them
+  vNear = smoothstep(0.8, 3.0, -mv.z);
+  gl_PointSize = min((0.5 + aSeed * 1.2) * uPixel * 45.0 / -mv.z, 18.0 * uPixel);
   gl_Position = projectionMatrix * mv;
 }
 `;
 const moteFragment = /* glsl */ `
 varying float vTw;
+varying float vNear;
 void main(){
   float a = smoothstep(0.5, 0.0, length(gl_PointCoord - 0.5));
-  gl_FragColor = vec4(vec3(0.9, 0.6, 0.26) * a * vTw * 0.6, 1.0);
+  gl_FragColor = vec4(vec3(0.9, 0.6, 0.26) * a * vTw * vNear * 0.6, 1.0);
 }
 `;
 

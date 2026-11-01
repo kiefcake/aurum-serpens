@@ -15,6 +15,7 @@ const FloorShader = {
     textureMatrix: { value: null },
     uSpine: { value: Array.from({ length: SHADOW_SAMPLES }, () => new THREE.Vector4()) },
     uTime: { value: 0 },
+    uShadowBound: { value: new THREE.Vector4(0, 0, 0, -1) },
     uTexel: { value: new THREE.Vector2(1 / 512, 1 / 512) },
   },
   vertexShader: /* glsl */ `
@@ -32,6 +33,7 @@ const FloorShader = {
     uniform sampler2D tDiffuse;
     uniform vec4 uSpine[${SHADOW_SAMPLES}];
     uniform float uTime;
+    uniform vec4 uShadowBound;
     uniform vec2 uTexel;
     varying vec4 vUv;
     varying vec3 vW;
@@ -57,6 +59,9 @@ const FloorShader = {
       col += refl * mix(0.22, 0.85, fres);
 
       float sh = 0.0;
+      // only pixels near the serpent's footprint pay for the contact-shadow loop
+      vec2 bd = vW.xz - uShadowBound.xy;
+      if (dot(bd, bd) < uShadowBound.w)
       for (int i = 0; i < ${SHADOW_SAMPLES}; i++){
         vec4 s = uSpine[i];
         vec2 d = vW.xz - s.xz;
@@ -76,18 +81,28 @@ export class Stage {
   constructor(scene, floorY) {
     this.floorY = floorY;
     const geo = new THREE.PlaneGeometry(80, 80);
-    const dpr = Math.min(window.devicePixelRatio, 1.5);
+    this.scale = Math.min(window.devicePixelRatio, 1.5) * 0.5;
     this.floor = new Reflector(geo, {
-      textureWidth: Math.round(innerWidth * dpr * 0.5),
-      textureHeight: Math.round(innerHeight * dpr * 0.5),
+      textureWidth: Math.round(innerWidth * this.scale),
+      textureHeight: Math.round(innerHeight * this.scale),
       clipBias: 0.003,
       shader: FloorShader,
     });
     this.floor.material.transparent = true;
+    // the mirror only needs what can actually stand on the floor: skip everything
+    // else in the reflection pass (it re-renders the whole scene otherwise)
+    this.hideInReflection = [];
+    const reflect = this.floor.onBeforeRender;
+    this.floor.onBeforeRender = (renderer, scene, camera) => {
+      const was = this.hideInReflection.map((o) => o.visible);
+      this.hideInReflection.forEach((o) => { o.visible = false; });
+      reflect(renderer, scene, camera);
+      this.hideInReflection.forEach((o, i) => { o.visible = was[i]; });
+    };
     this.floor.rotation.x = -Math.PI / 2;
     this.floor.position.y = floorY;
     const u = this.floor.material.uniforms;
-    u.uTexel.value.set(1 / (innerWidth * dpr * 0.5), 1 / (innerHeight * dpr * 0.5));
+    u.uTexel.value.set(1 / (innerWidth * this.scale), 1 / (innerHeight * this.scale));
     scene.add(this.floor);
 
     // halo rings: thin bars of HDR gold that bloom, turning like a gyroscope
@@ -103,16 +118,28 @@ export class Stage {
     this.shadowSamples = u.uSpine.value;
   }
 
-  resize() {
-    const dpr = Math.min(window.devicePixelRatio, 1.5);
-    const w = Math.round(innerWidth * dpr * 0.5), h = Math.round(innerHeight * dpr * 0.5);
+  // pixelRatio follows the adaptive render scale; the mirror is half of it
+  resize(pixelRatio = Math.min(window.devicePixelRatio, 1.5)) {
+    this.scale = Math.min(pixelRatio, 1.5) * 0.5;
+    const w = Math.round(innerWidth * this.scale), h = Math.round(innerHeight * this.scale);
     this.floor.getRenderTarget().setSize(w, h);
     this.floor.material.uniforms.uTexel.value.set(1 / w, 1 / h);
   }
 
   update(time, visible) {
     this.floor.visible = this.rings.visible = visible;
-    this.floor.material.uniforms.uTime.value = time;
+    const u = this.floor.material.uniforms;
+    u.uTime.value = time;
+    // footprint of the shadow samples (centre xz, squared radius incl. blur reach)
+    let cx = 0, cz = 0;
+    for (const s of this.shadowSamples) { cx += s.x; cz += s.z; }
+    cx /= this.shadowSamples.length; cz /= this.shadowSamples.length;
+    let r = 0;
+    for (const s of this.shadowSamples) {
+      const reach = s.w * 1.8 + Math.max(s.y - this.floorY, 0) * 0.4 + 0.05;
+      r = Math.max(r, Math.hypot(s.x - cx, s.z - cz) + reach * 2.5);
+    }
+    u.uShadowBound.value.set(cx, cz, 0, r * r);
     const [outer, inner, tick] = this.ringParts;
     outer.rotation.y = Math.sin(time * 0.25) * 0.5;
     inner.rotation.x = time * 0.18;

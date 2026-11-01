@@ -90,8 +90,13 @@ vec2 snake(vec3 p){
 }
 
 vec2 map(vec3 p){
-  vec2 s = snake(p);
   float ped = pedestal(p);
+  // the whole snake, head included, lives inside a fat torus: far from it,
+  // the distance to that torus is a safe step and skips the detailed SDF
+  vec3 b = toSnake(p);
+  float bound = length(vec2(length(b.xz) - 1.15, b.y)) - 0.62;
+  if (bound > 0.08) return ped < bound ? vec2(ped, 1.0) : vec2(bound, 0.0);
+  vec2 s = snake(p);
   return ped < s.x ? vec2(ped, 1.0) : s;
 }
 
@@ -103,10 +108,10 @@ vec3 calcNormal(vec3 p){
 
 float softShadow(vec3 ro, vec3 rd){
   float res = 1.0, t = 0.02;
-  for (int i = 0; i < 40; i++){
+  for (int i = 0; i < 28; i++){
     float h = map(ro + rd * t).x;
     res = min(res, 10.0 * h / t);
-    t += clamp(h, 0.02, 0.25);
+    t += clamp(h, 0.03, 0.3);
     if (res < 0.002 || t > 5.0) break;
   }
   return clamp(res, 0.0, 1.0);

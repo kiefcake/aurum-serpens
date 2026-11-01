@@ -1,9 +1,8 @@
 import * as THREE from 'three';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { DualBloomPass } from './bloom.js';
 import { Serpent, SERPENT_LENGTH } from './serpent.js';
 import { MoneyTree } from './moneyTree.js';
 import { Sculpture } from './sculpture.js';
@@ -21,7 +20,13 @@ const RING_R = SERPENT_LENGTH / (Math.PI * 2) * 0.97;
 
 const canvas = document.getElementById('gl');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
-const pixelRatio = Math.min(window.devicePixelRatio, 1.75);
+// render scale ladder: the governor below walks it to hold the frame rate
+const ladder = (dpr) => {
+  const top = Math.min(dpr, 1.75);
+  return [top, ...[1.5, 1.25, 1, 0.8, 0.65].filter((s) => s < top - 0.01)];
+};
+let SCALES = ladder(window.devicePixelRatio);
+let pixelRatio = SCALES[0];
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -42,17 +47,86 @@ const serpent = new Serpent(scene);
 const stage = new Stage(scene, HERO_FLOOR);
 const moon = new CoinMoon(scene, TREE_ORIGIN.clone().add(new THREE.Vector3(0, 7, 0)));
 const shadowSamples = stage.shadowSamples;
+stage.hideInReflection.push(tree.group, sculpture.group, sculpture.shaft, sculpture.floor, atmosphere.motes, moon.mesh);
 
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * pixelRatio, innerHeight * pixelRatio, {
   type: THREE.HalfFloatType,
-  samples: 4,
+  samples: pixelRatio >= 1.4 ? 2 : 4,
 }));
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.35, 1.1);
+const bloom = new DualBloomPass({ threshold: 1.0, knee: 0.6 });
 composer.addPass(bloom);
+// the lens pass composites bloom and does tone mapping + sRGB output itself
 const lens = new ShaderPass(FinalShader);
+lens.uniforms.tBloom.value = bloom.texture;
 composer.addPass(lens);
-composer.addPass(new OutputPass());
+
+// ---------------------------------------------------------------- adaptive quality
+// The render scale walks a ladder to hold ~60 fps. Where the browser exposes GPU
+// timer queries the decision uses real GPU milliseconds (immune to vsync and to
+// background-tab throttling) and can predict whether the next step up still
+// fits; elsewhere it falls back to frame time and only ever steps down.
+const gl = renderer.getContext();
+const timer = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+const queries = [];
+const quality = { level: 0, avg: 0, samples: 0, ups: 0 };
+
+function msaaFor(pr) {
+  // dense screens already supersample; spend MSAA where pixels are coarse
+  return pr >= 1.4 || pr < 1 ? 2 : 4;
+}
+
+function applyPixelRatio(pr) {
+  pixelRatio = pr;
+  renderer.setPixelRatio(pr);
+  const samples = msaaFor(pr);
+  for (const rt of [composer.renderTarget1, composer.renderTarget2]) {
+    if (rt.samples !== samples) { rt.samples = samples; rt.dispose(); }
+  }
+  composer.setPixelRatio(pr);
+  stage.resize(pr);
+  lens.uniforms.uRes.value = [innerWidth * pr, innerHeight * pr];
+}
+
+function setLevel(next) {
+  quality.level = next;
+  quality.avg = 0;
+  quality.samples = 0;
+  applyPixelRatio(SCALES[next]);
+}
+
+function sampleCost(ms) {
+  quality.samples++;
+  quality.avg += (ms - quality.avg) / Math.min(quality.samples, 30);
+  if (quality.samples < 90) return;           // ~1.5 s of evidence per decision
+  const { level, avg } = quality;
+  if (timer) {
+    const ratio = level > 0 ? (SCALES[level - 1] / SCALES[level]) ** 2 : Infinity;
+    if (avg > 15 && level < SCALES.length - 1) setLevel(level + 1);
+    else if (avg * ratio < 11) setLevel(level - 1);
+    else quality.samples = 60;
+  } else if (avg > 22 && level < SCALES.length - 1) setLevel(level + 1);
+  else if (avg < 17.4 && level > 0 && quality.ups < 1) { quality.ups++; setLevel(level - 1); }
+  else quality.samples = 60;
+}
+
+function beginGpuTimer() {
+  if (!timer || queries.length > 4) return false;
+  const q = gl.createQuery();
+  gl.beginQuery(timer.TIME_ELAPSED_EXT, q);
+  queries.push(q);
+  return true;
+}
+
+function endGpuTimer(started) {
+  if (started) gl.endQuery(timer.TIME_ELAPSED_EXT);
+  while (queries.length && gl.getQueryParameter(queries[0], gl.QUERY_RESULT_AVAILABLE)) {
+    const q = queries.shift();
+    const ms = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+    if (!gl.getParameter(timer.GPU_DISJOINT_EXT) && ms > 0.05) sampleCost(ms);
+    gl.deleteQuery(q);
+  }
+}
 
 // ---------------------------------------------------------------- scroll rig
 const sections = {
@@ -131,7 +205,7 @@ addEventListener('pointerup', () => { pointer.down = false; });
 
 // ---------------------------------------------------------------- loop
 const clock = new THREE.Clock();
-let scrollP = 0, scrollTarget = 0, prevP = 0, velocity = 0;
+let scrollP = 0, scrollTarget = 0, prevP = 0, velocity = 0, lastNow = 0;
 let weights = { hero: 1, tree: 0, sculpture: 0, outro: 0 };
 const target = new THREE.Vector3();
 const idle = new THREE.Vector3();
@@ -178,7 +252,21 @@ function idleTarget(t, out) {
 function frame() {
   const dt = Math.min(clock.getDelta(), 1 / 20);
   const t = clock.elapsedTime;
+  const now = performance.now();
+  // frame time is only a GPU signal in the fallback path, and never when throttled
+  if (!timer && lastNow && now - lastNow < 120 && !document.hidden && t > 2.5) sampleCost(now - lastNow);
+  lastNow = now;
 
+  simulate(dt, t);
+  const timing = t > 2.5 && beginGpuTimer();
+  composer.render(dt);
+  endGpuTimer(timing);
+
+  ui.update({ t, p: scrollP, weights, coins: tree.coinsGrown(), totalCoins: tree.coinCount, charm });
+  requestAnimationFrame(frame);
+}
+
+function simulate(dt, t) {
   scrollP += (scrollTarget - scrollP) * (1 - Math.exp(-dt * 4.5));
   velocity += ((scrollP - prevP) / Math.max(dt, 1e-3) * 2.5 - velocity) * (1 - Math.exp(-dt * 8));
   prevP = scrollP;
@@ -223,7 +311,8 @@ function frame() {
 
   const [t0, t1] = anchors.tree;
   const growth = THREE.MathUtils.clamp((scrollP - (t0 - 0.04)) / ((t1 - t0) * 0.85 + 0.04), 0, 1);
-  tree.update(dt, t, growth, weights.hero < 0.999 || scrollP > 0.02);
+  // only draw the tree while the camera is anywhere near it
+  tree.update(dt, t, growth, scrollP > t0 - 0.08 && scrollP < anchors.sculpture[0] + 0.01);
   if (pointer.dragDx && weights.sculpture > 0.5) sculpture.drag(pointer.dragDx);
   pointer.dragDx = 0;
   sculpture.update(dt, t, weights.sculpture > 0.001 || scrollP > anchors.tree[1] - 0.05);
@@ -232,18 +321,20 @@ function frame() {
 
   lens.uniforms.uTime.value = t;
   lens.uniforms.uVel.value = velocity;
-  composer.render(dt);
-
-  ui.update({ t, p: scrollP, weights, coins: tree.coinsGrown(), totalCoins: tree.coinCount, charm });
-  requestAnimationFrame(frame);
 }
 
 function resize() {
+  // moved to a screen with a different density: rebuild the ladder, keep the step
+  if (Math.min(window.devicePixelRatio, 1.75) !== SCALES[0]) {
+    SCALES = ladder(window.devicePixelRatio);
+    quality.level = Math.min(quality.level, SCALES.length - 1);
+    applyPixelRatio(SCALES[quality.level]);
+  }
   camera.aspect = innerWidth / innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
-  stage.resize();
+  stage.resize(pixelRatio);
   lens.uniforms.uRes.value = [innerWidth * pixelRatio, innerHeight * pixelRatio];
   buildRig();
   readScroll();

@@ -1,7 +1,12 @@
-// Lens pass: scroll-velocity barrel warp, chromatic fringing, vignette and grain.
+// Final pass: scroll-velocity barrel warp, chromatic fringing, bloom composite,
+// vignette, then tone mapping and sRGB output (replacing three's OutputPass, so
+// the frame takes one full-resolution pass here instead of three), and grain
+// added last, in display space, where it reads as film rather than noise.
 export const FinalShader = {
   uniforms: {
     tDiffuse: { value: null },
+    tBloom: { value: null },
+    uBloom: { value: 0.06 },
     uTime: { value: 0 },
     uVel: { value: 0 },
     uRes: { value: [1, 1] },
@@ -12,6 +17,8 @@ export const FinalShader = {
   `,
   fragmentShader: /* glsl */ `
     uniform sampler2D tDiffuse;
+    uniform sampler2D tBloom;
+    uniform float uBloom;
     uniform float uTime;
     uniform float uVel;
     uniform vec2 uRes;
@@ -28,11 +35,14 @@ export const FinalShader = {
       col.r = texture2D(tDiffuse, uv + dir).r;
       col.g = texture2D(tDiffuse, uv).g;
       col.b = texture2D(tDiffuse, uv - dir).b;
+      col += texture2D(tBloom, uv).rgb * uBloom;
       float vig = smoothstep(0.9, 0.25, length(c * vec2(1.0, 0.8)));
       col *= mix(0.5, 1.0, vig);
-      float g = hash(vUv * uRes + fract(uTime * 7.0) * 113.0) - 0.5;
-      col += g * 0.018 * (0.2 + col);
       gl_FragColor = vec4(max(col, 0.0), 1.0);
+      #include <tonemapping_fragment>
+      #include <colorspace_fragment>
+      float g = hash(vUv * uRes + fract(uTime * 7.0) * 113.0) - 0.5;
+      gl_FragColor.rgb += g * (0.012 + 0.02 * gl_FragColor.rgb);
     }
   `,
 };

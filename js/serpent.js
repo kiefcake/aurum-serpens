@@ -90,32 +90,41 @@ const FRAG_SURFACE = /* glsl */ `
   float dome = 1.0 - smoothstep(0.05, 0.62 + aa, d);
   float groove = smoothstep(0.44 - aa, 0.54 + aa, d) * (1.0 - smoothstep(0.25, 0.5, aa));
 
-  // cell-centre coordinates so the motif snaps to whole scales (mosaic look)
-  float cAround = (id.x + 0.5 - shift) / aroundN;
-  float cAlong = (id.y + 0.5) / rowsN;
-  float lateral = sin(cAround * 6.2831853);
-  float dorsal = cos(cAround * 6.2831853);
-  float motif = abs(fract(cAlong * 9.0) - 0.5) * 2.0;
+  // cloisonne motif on continuous coordinates: emerald diamonds in a slim onyx
+  // border, each field fenced by a raised gold wire, anti-aliased by fwidth
+  float aroundA = vSUv.y * 6.2831853;
+  float lateral = sin(aroundA);
+  float top = smoothstep(-0.05, 0.12, cos(aroundA)) * (1.0 - head);
+  float motif = abs(fract(along * 9.0) - 0.5) * 2.0;
   float dia = abs(lateral) * 1.25 + motif;
-  float enamel = step(dia, 0.82) * step(0.0, dorsal) * (1.0 - head);
-  float rimGold = step(dia, 1.02) * (1.0 - enamel) * step(0.0, dorsal);
-  float emerald = enamel * step(0.6, dia);
+  float fw = fwidth(dia) * 0.75 + 1e-4;
+  float field = 1.0 - smoothstep(0.82 - fw, 0.82 + fw, dia);
+  float core = 1.0 - smoothstep(0.66 - fw, 0.66 + fw, dia);
+  float wire = max(1.0 - smoothstep(0.022, 0.022 + fw * 2.0, abs(dia - 0.82)),
+                   1.0 - smoothstep(0.016, 0.016 + fw * 2.0, abs(dia - 0.66))) * top;
+  float enamel = field * top * (1.0 - wire);
+  float emerald = core * top * (1.0 - wire);
 
   // continuous belly: wide plates instead of scales
   float bellyMask = smoothstep(-0.55, -0.75, cos(vSUv.y * 6.2831853));
   float plate = abs(fract(along * 150.0) - 0.5) * 2.0;
   float plateH = 1.0 - smoothstep(0.75, 1.0, plate);
-  float h = mix(dome - groove * 0.6, plateH, bellyMask);
+  float scales = mix(dome - groove * 0.6, 0.3, enamel) + wire * 0.35;
+  float h = mix(scales, plateH, bellyMask);
 
   vec3 gold = vec3(1.0, 0.74, 0.36);
   vec3 col = gold * (0.9 + 0.1 * h21(id));
+  col *= 1.0 - groove * 0.55 * (1.0 - bellyMask) * (1.0 - enamel);
   col = mix(col, vec3(0.006, 0.006, 0.007), enamel);
-  col = mix(col, vec3(0.0, 0.09, 0.045), emerald);
+  // emerald is brightest at the heart of each stone, like light pooling in thick glass
+  vec3 green = mix(vec3(0.0, 0.05, 0.026), vec3(0.01, 0.2, 0.095), smoothstep(0.62, 0.15, dia));
+  col = mix(col, green, emerald);
   col = mix(col, gold * vec3(1.0, 0.92, 0.82), bellyMask);
-  diffuseColor.rgb = col * (1.0 - groove * 0.55 * (1.0 - bellyMask));
+  diffuseColor.rgb = col;
 
   float sMetal = 1.0 - enamel * (1.0 - bellyMask);
-  float sRough = mix(0.27 + groove * 0.3, 0.1, enamel);
+  float sRough = mix(0.27 + groove * 0.3, 0.06, enamel);
+  sRough = mix(sRough, 0.16, wire);
   sRough = mix(sRough, 0.3, bellyMask * 0.6);
   sRough = mix(sRough, 0.2, head);
   float sHeight = h;
@@ -304,13 +313,18 @@ export class Serpent {
     const dist = to.length();
     // cruise gently up close, but cross long distances fast so the body never
     // lingers as a pole through the frame while the camera changes chapters
-    const speed = dist > 8 ? Math.min(dist * 4.5, 90) : 1.6 + dist * 2.0;
+    let speed = dist > 8 ? Math.min(dist * 4.5, 90) : 1.6 + dist * 2.0;
     const desired = to.normalize();
+    // fast travel needs fast steering, or the turning circle outgrows the
+    // distance and it orbits the target; it also eases off while facing away
+    const align = this.heading.dot(desired);
+    const turn = 4 + speed * 0.25;
+    speed *= 0.3 + 0.7 * Math.max(0, align);
     const view = this._b.subVectors(camPos, points[0]).normalize().lerp(this._up, groundWeight).normalize();
     // lateral undulation: swing the heading side to side around the dorsal axis
     this.phase += dt * (1.5 + speed * 0.32);
     desired.applyAxisAngle(view, Math.sin(this.phase) * 0.85 * wiggle * Math.min(1, 0.35 + dist * 0.3)).normalize();
-    this.heading.lerp(desired, 1 - Math.exp(-dt * 4)).normalize();
+    this.heading.lerp(desired, 1 - Math.exp(-dt * turn)).normalize();
     points[0].addScaledVector(this.heading, speed * dt);
 
     // on the floor the body settles onto the ground plane (only once it is near
