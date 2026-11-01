@@ -189,7 +189,7 @@ const COIN_FRAG = /* glsl */ `
   vec3 base = vKind > 1.5 ? cBronze : (vKind > 0.5 ? cJade : cGold);
   diffuseColor.rgb = base * (0.7 + 0.3 * sHeight);
   float sMetal = vKind > 1.5 ? 0.7 : (vKind > 0.5 ? 0.0 : 1.0);
-  float sRough = vKind > 0.5 ? (vKind > 1.5 ? 0.6 : 0.1) : mix(0.42, 0.12, smoothstep(0.4, 0.8, sHeight));
+  float sRough = vKind > 0.5 ? (vKind > 1.5 ? 0.6 : 0.1) : mix(0.38, 0.2, smoothstep(0.4, 0.8, sHeight));
 `;
 
 function physical(params, { uniforms, vertHead, vertNormal, vertPos, fragHead, fragBody, bump }) {
@@ -427,7 +427,7 @@ export class MoneyTree {
   }
 
   _coinMaterial(vertHead, vertNormal, vertPos) {
-    return physical({ color: 0xffffff, metalness: 1, roughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.2, side: THREE.DoubleSide }, {
+    return physical({ color: 0xffffff, metalness: 1, roughness: 0.3, envMapIntensity: 1.4, side: THREE.DoubleSide }, {
       uniforms: this.uniforms,
       vertHead: COIN_VERT_HEAD + vertHead,
       vertNormal,
@@ -439,7 +439,7 @@ export class MoneyTree {
   }
 
   _buildCoins(leaves, maxBirth) {
-    const geo = this._coinGeometry(0.13);
+    const geo = this._coinGeometry(0.155);
     const n = leaves.length;
     const birth = new Float32Array(n), phase = new Float32Array(n), anchor = new Float32Array(n * 3);
     leaves.forEach((l, i) => {
@@ -491,8 +491,8 @@ export class MoneyTree {
     const geo = new THREE.CylinderGeometry(0.13, 0.13, 0.02, 32);
     const face = this.uniforms.uCoinFace.value;
     const mat = new THREE.MeshPhysicalMaterial({
-      color: 0xffb95c, metalness: 1, roughness: 0.28,
-      bumpMap: face, bumpScale: 2.5, alphaMap: face, alphaTest: 0.12,
+      color: 0xffdb91, metalness: 1, roughness: 0.3, envMapIntensity: 1.2,
+      bumpMap: face, bumpScale: 1.2, alphaMap: face, alphaTest: 0.12,
     });
     this.pile = new THREE.InstancedMesh(geo, mat, n);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();

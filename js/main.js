@@ -176,7 +176,8 @@ function frame() {
   camera.position.y += pointer.ndc.y * 0.35;
   // push the subject away from the chapter copy (tree copy is left, sculpture copy right)
   if (innerWidth > 720) {
-    const shift = (-0.16 * weights.tree + 0.2 * weights.sculpture) * camera.position.distanceTo(look);
+    const halfW = camera.position.distanceTo(look) * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) * camera.aspect;
+    const shift = (-0.34 * weights.tree + 0.34 * weights.sculpture) * halfW;
     tmp.subVectors(look, camera.position).cross(camera.up).normalize();
     look.addScaledVector(tmp, shift);
   }
