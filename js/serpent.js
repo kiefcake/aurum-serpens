@@ -11,6 +11,7 @@ import { createHead, EYE_POSITIONS, SNOUT } from './serpentHead.js';
 
 const N = 128;
 const LENGTH = 12;
+export const SERPENT_LENGTH = LENGTH;
 const SEG = LENGTH / (N - 1);
 const RADIUS = 0.42;
 const RINGS = 520;
@@ -297,7 +298,7 @@ export class Serpent {
 
   // groundWeight: 1 = slithering on a floor (back faces up), 0 = free in the air
   // (back faces the camera).
-  update(dt, time, target, camPos, groundWeight = 0) {
+  update(dt, time, target, camPos, groundWeight = 0, wiggle = 1) {
     const { points, tangents, normals } = this;
     const to = this._a.subVectors(target, points[0]);
     const dist = to.length();
@@ -308,17 +309,24 @@ export class Serpent {
     const view = this._b.subVectors(camPos, points[0]).normalize().lerp(this._up, groundWeight).normalize();
     // lateral undulation: swing the heading side to side around the dorsal axis
     this.phase += dt * (1.5 + speed * 0.32);
-    desired.applyAxisAngle(view, Math.sin(this.phase) * 0.85 * Math.min(1, 0.35 + dist * 0.3)).normalize();
+    desired.applyAxisAngle(view, Math.sin(this.phase) * 0.85 * wiggle * Math.min(1, 0.35 + dist * 0.3)).normalize();
     this.heading.lerp(desired, 1 - Math.exp(-dt * 4)).normalize();
     points[0].addScaledVector(this.heading, speed * dt);
 
+    // on the floor the body settles onto the ground plane (only once it is near
+    // it, and before the length constraint so segments never stretch)
+    if (groundWeight > 0) {
+      const k = Math.min(1, dt * 6) * groundWeight;
+      for (let i = 1; i < N; i++) {
+        const dy = target.y - points[i].y;
+        if (Math.abs(dy) < 2) points[i].y += dy * k;
+      }
+    }
     for (let i = 1; i < N; i++) {
       const d = this._a.subVectors(points[i], points[i - 1]);
       const l = d.length();
       if (l < 1e-6) d.copy(this.heading).negate(); else d.divideScalar(l);
       points[i].copy(points[i - 1]).addScaledVector(d, SEG);
-      // on the floor the body settles onto the ground plane
-      if (groundWeight > 0) points[i].y += (target.y - points[i].y) * Math.min(1, dt * 6) * groundWeight;
     }
 
     const blend = 1 - Math.exp(-dt * 10);

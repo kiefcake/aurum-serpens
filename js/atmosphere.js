@@ -56,6 +56,7 @@ export const PALETTES = {
   hero: { top: [0.0015, 0.0013, 0.0012], horizon: [0.014, 0.01, 0.007], bottom: [0.0, 0.0, 0.0] },
   tree: { top: [0.003, 0.002, 0.0015], horizon: [0.045, 0.024, 0.009], bottom: [0.002, 0.001, 0.0] },
   sculpture: { top: [0.06, 0.065, 0.08], horizon: [0.016, 0.018, 0.024], bottom: [0.004, 0.004, 0.006] },
+  outro: { top: [0.004, 0.0035, 0.003], horizon: [0.02, 0.014, 0.008], bottom: [0.001, 0.001, 0.001] },
 };
 
 export class Atmosphere {

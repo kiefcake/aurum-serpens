@@ -21,9 +21,9 @@ export const FinalShader = {
       vec2 c = vUv - 0.5;
       float r2 = dot(c, c);
       float v = clamp(uVel, -1.0, 1.0);
-      vec2 uv = 0.5 + c * (1.0 - abs(v) * 0.22 * r2);
+      vec2 uv = 0.5 + c * (1.0 - abs(v) * 0.12 * r2);
       uv.y += v * 0.012 * sin(vUv.x * 3.1416);
-      vec2 dir = c * (0.0008 + abs(v) * 0.004);
+      vec2 dir = c * (0.0006 + abs(v) * 0.0015);
       vec3 col;
       col.r = texture2D(tDiffuse, uv + dir).r;
       col.g = texture2D(tDiffuse, uv).g;

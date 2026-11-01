@@ -108,14 +108,17 @@ ${BUMP}
 const BARK_FRAG = /* glsl */ `
   float n1 = fbm(vWPos * 1.3);
   float n2 = fbm(vWPos * vec3(6.0, 1.4, 6.0));
-  float patina = smoothstep(0.4, 0.62, n1 + (n2 - 0.5) * 0.5);
+  // verdigris gathers in the bark furrows and in broad weathered patches;
+  // the raised ridges stay rubbed back to bronze
+  float furrow = 1.0 - abs(sin(n2 * 14.0));
+  float patina = clamp(smoothstep(0.5, 0.7, n1) + smoothstep(0.5, 0.95, furrow) * 0.9, 0.0, 1.0);
   float vein = smoothstep(0.018, 0.0, abs(fbm(vWPos * 0.9 + 3.0) - 0.5)) * (1.0 - patina);
   vec3 bronze = vec3(0.5, 0.29, 0.14) * (0.8 + 0.4 * n2);
-  vec3 verd = mix(vec3(0.09, 0.3, 0.25), vec3(0.3, 0.58, 0.48), n2);
+  vec3 verd = mix(vec3(0.07, 0.26, 0.22), vec3(0.34, 0.6, 0.5), smoothstep(0.3, 0.8, fbm(vWPos * 9.0)));
   diffuseColor.rgb = mix(mix(bronze, verd, patina), ${GOLD}, vein);
   float sMetal = mix(mix(0.92, 0.0, patina), 1.0, vein);
   float sRough = mix(mix(0.38, 0.88, patina), 0.14, vein);
-  float sHeight = n2 * 0.8 + patina * 0.6 - vein * 0.4;
+  float sHeight = (1.0 - furrow) * 0.7 + patina * 0.25 - vein * 0.4;
   float pulse = pow(0.5 + 0.5 * sin(vWPos.y * 1.2 - uTime * 2.0), 12.0);
 `;
 
@@ -284,9 +287,9 @@ export class MoneyTree {
       branches.push({ pts, radii, births });
       if (opts.root) return;
 
-      if (depth >= MAX_DEPTH - 1) {
+      if (depth >= MAX_DEPTH - 2) {
         for (let i = 2; i <= segs; i++) {
-          if (rng() < 0.42 + 0.15 * (depth - 3)) {
+          if (rng() < [0.3, 0.72, 0.9][depth - (MAX_DEPTH - 2)]) {
             leaves.push({
               anchor: pts[i].clone().add(new THREE.Vector3((rng() - 0.5) * 0.1, -0.02, (rng() - 0.5) * 0.1)),
               birth: births[i] + 0.4 + rng() * 0.6,

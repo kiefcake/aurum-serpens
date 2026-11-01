@@ -4,11 +4,12 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { Serpent } from './serpent.js';
+import { Serpent, SERPENT_LENGTH } from './serpent.js';
 import { MoneyTree } from './moneyTree.js';
 import { Sculpture } from './sculpture.js';
 import { Atmosphere } from './atmosphere.js';
 import { Stage } from './stage.js';
+import { CoinMoon } from './coinMoon.js';
 import { createStudioEnvironment } from './studio.js';
 import { FinalShader } from './finalPass.js';
 import { initUI } from './ui.js';
@@ -16,6 +17,7 @@ import { initUI } from './ui.js';
 const TREE_ORIGIN = new THREE.Vector3(0, -44, 0);
 const SCULPTURE_ORIGIN = new THREE.Vector3(0, -86, 0);
 const HERO_FLOOR = -2;
+const RING_R = SERPENT_LENGTH / (Math.PI * 2) * 0.97;
 
 const canvas = document.getElementById('gl');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -38,6 +40,7 @@ const tree = new MoneyTree(scene, TREE_ORIGIN);
 const sculpture = new Sculpture(scene, SCULPTURE_ORIGIN);
 const serpent = new Serpent(scene);
 const stage = new Stage(scene, HERO_FLOOR);
+const moon = new CoinMoon(scene, TREE_ORIGIN.clone().add(new THREE.Vector3(0, 7, 0)));
 const shadowSamples = stage.shadowSamples;
 
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * pixelRatio, innerHeight * pixelRatio, {
@@ -97,10 +100,11 @@ function pathU(p) {
 
 const smooth = (a, b, x) => THREE.MathUtils.smoothstep(x, a, b);
 function stationWeights(p) {
-  const [t0, t1] = anchors.tree, [s0] = anchors.sculpture;
+  const [t0, t1] = anchors.tree, [s0, s1] = anchors.sculpture;
   const treeW = smooth(t0 - 0.06, t0, p) * (1 - smooth(t1, s0, p));
-  const sculptW = smooth(t1, s0, p);
-  return { hero: Math.max(0, 1 - treeW - sculptW), tree: treeW, sculpture: sculptW };
+  const outroW = smooth(s1, s1 + (1 - s1) * 0.7, p);
+  const sculptW = smooth(t1, s0, p) * (1 - outroW);
+  return { hero: Math.max(0, 1 - treeW - sculptW - outroW), tree: treeW, sculpture: sculptW, outro: outroW };
 }
 
 // ---------------------------------------------------------------- input
@@ -128,7 +132,7 @@ addEventListener('pointerup', () => { pointer.down = false; });
 // ---------------------------------------------------------------- loop
 const clock = new THREE.Clock();
 let scrollP = 0, scrollTarget = 0, prevP = 0, velocity = 0;
-let weights = { hero: 1, tree: 0, sculpture: 0 };
+let weights = { hero: 1, tree: 0, sculpture: 0, outro: 0 };
 const target = new THREE.Vector3();
 const idle = new THREE.Vector3();
 const look = new THREE.Vector3();
@@ -157,6 +161,17 @@ function idleTarget(t, out) {
   tmp.set(SCULPTURE_ORIGIN.x + Math.cos(t * 0.55) * gr, SCULPTURE_ORIGIN.y - 2.75,
     SCULPTURE_ORIGIN.z + Math.sin(t * 0.55) * gr);
   out.addScaledVector(tmp, weights.sculpture);
+  // coda: a vertical ring in front of the camera framing the closing line. Its
+  // circumference matches the body, so the head ends up biting its own tail.
+  if (weights.outro > 0) {
+    const fwd = camera.getWorldDirection(new THREE.Vector3());
+    const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
+    const up = new THREE.Vector3().crossVectors(right, fwd);
+    const a = t * 0.85;
+    tmp.copy(camera.position).addScaledVector(fwd, 9.5)
+      .addScaledVector(right, Math.cos(a) * RING_R).addScaledVector(up, Math.sin(a) * RING_R + 0.25);
+    out.addScaledVector(tmp, weights.outro);
+  }
   return out;
 }
 
@@ -200,9 +215,9 @@ function frame() {
       floorHit.distanceTo(camera.position) < 30) {
     cursorPoint.lerp(floorHit, THREE.MathUtils.smoothstep(weights.hero + weights.sculpture, 0.5, 0.9));
   }
-  target.copy(idleTarget(t, idle)).lerp(cursorPoint, charm);
+  target.copy(idleTarget(t, idle)).lerp(cursorPoint, charm * (1 - weights.outro * 0.9));
   const grounded = THREE.MathUtils.smoothstep(weights.hero + weights.sculpture, 0.6, 1);
-  serpent.update(dt, t, target, camera.position, grounded);
+  serpent.update(dt, t, target, camera.position, grounded, 1 - weights.outro);
   serpent.sampleSpine(shadowSamples, shadowSamples.length);
   stage.update(t, weights.hero > 0.01);
 
@@ -213,6 +228,7 @@ function frame() {
   pointer.dragDx = 0;
   sculpture.update(dt, t, weights.sculpture > 0.001 || scrollP > anchors.tree[1] - 0.05);
   atmosphere.update(t, camera, weights, pixelRatio);
+  moon.update(t, camera, weights.tree, growth);
 
   lens.uniforms.uTime.value = t;
   lens.uniforms.uVel.value = velocity;
