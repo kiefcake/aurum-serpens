@@ -8,10 +8,10 @@ import { MoneyTree } from './moneyTree.js';
 import { Sculpture } from './sculpture.js';
 import { Atmosphere } from './atmosphere.js';
 import { Stage } from './stage.js';
-import { CoinMoon } from './coinMoon.js';
 import { createStudioEnvironment } from './studio.js';
 import { FinalShader } from './finalPass.js';
 import { initUI } from './ui.js';
+import { initSmoothScroll } from './smoothScroll.js';
 
 const TREE_ORIGIN = new THREE.Vector3(0, -44, 0);
 const SCULPTURE_ORIGIN = new THREE.Vector3(0, -86, 0);
@@ -40,14 +40,13 @@ scene.add(key);
 const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 1200);
 camera.position.set(0, 0, 14);
 
-const atmosphere = new Atmosphere(scene);
+const atmosphere = new Atmosphere(scene, TREE_ORIGIN.clone().add(new THREE.Vector3(0, 7, 0)));
 const tree = new MoneyTree(scene, TREE_ORIGIN);
 const sculpture = new Sculpture(scene, SCULPTURE_ORIGIN);
 const serpent = new Serpent(scene);
 const stage = new Stage(scene, HERO_FLOOR);
-const moon = new CoinMoon(scene, TREE_ORIGIN.clone().add(new THREE.Vector3(0, 7, 0)));
 const shadowSamples = stage.shadowSamples;
-stage.hideInReflection.push(tree.group, sculpture.group, sculpture.shaft, sculpture.floor, atmosphere.motes, moon.mesh);
+stage.hideInReflection.push(tree.group, sculpture.group, sculpture.shaft, sculpture.floor, sculpture.colonnade, atmosphere.motes);
 
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * pixelRatio, innerHeight * pixelRatio, {
   type: THREE.HalfFloatType,
@@ -162,14 +161,38 @@ function buildRig() {
   keyP = keys.map((k) => k[0]);
   camPath = new THREE.CatmullRomCurve3(keys.map((k) => new THREE.Vector3(...k[1])), false, 'centripetal');
   lookPath = new THREE.CatmullRomCurve3(keys.map((k) => new THREE.Vector3(...k[2])), false, 'centripetal');
+  buildTiming();
+}
+
+// Scroll progress -> curve parameter through the keys. A monotone cubic
+// (Fritsch-Carlson) keeps the camera moving through each key instead of
+// easing to a halt at every one, without ever backing up.
+let keyM = [];
+function buildTiming() {
+  const n = keyP.length, du = 1 / (n - 1);
+  const sec = [];
+  for (let i = 0; i < n - 1; i++) sec.push(du / Math.max(keyP[i + 1] - keyP[i], 1e-5));
+  keyM = keyP.map((_, i) => (i === 0 ? sec[0] : i === n - 1 ? sec[n - 2] : (sec[i - 1] + sec[i]) / 2));
+  for (let i = 0; i < n - 1; i++) {
+    const a = keyM[i] / sec[i], b = keyM[i + 1] / sec[i], h = a * a + b * b;
+    if (h > 9) { const k = 3 / Math.sqrt(h); keyM[i] = k * a * sec[i]; keyM[i + 1] = k * b * sec[i]; }
+  }
+  // start and end at rest
+  keyM[0] = 0;
+  keyM[n - 1] = 0;
 }
 
 function pathU(p) {
+  const n = keyP.length;
+  if (p <= keyP[0]) return 0;
+  if (p >= keyP[n - 1]) return 1;
   let i = 0;
-  while (i < keyP.length - 2 && p > keyP[i + 1]) i++;
-  const t = THREE.MathUtils.clamp((p - keyP[i]) / Math.max(keyP[i + 1] - keyP[i], 1e-5), 0, 1);
-  const eased = t * t * (3 - 2 * t);
-  return (i + eased) / (keyP.length - 1);
+  while (i < n - 2 && p > keyP[i + 1]) i++;
+  const h = keyP[i + 1] - keyP[i], t = (p - keyP[i]) / h;
+  const t2 = t * t, t3 = t2 * t;
+  const u0 = i / (n - 1), u1 = (i + 1) / (n - 1);
+  return (2 * t3 - 3 * t2 + 1) * u0 + (t3 - 2 * t2 + t) * h * keyM[i] +
+         (-2 * t3 + 3 * t2) * u1 + (t3 - t2) * h * keyM[i + 1];
 }
 
 const smooth = (a, b, x) => THREE.MathUtils.smoothstep(x, a, b);
@@ -205,12 +228,14 @@ addEventListener('pointerup', () => { pointer.down = false; });
 
 // ---------------------------------------------------------------- loop
 const clock = new THREE.Clock();
-let scrollP = 0, scrollTarget = 0, prevP = 0, velocity = 0, lastNow = 0;
+let scrollP = 0, scrollTarget = 0, prevP = 0, velocity = 0, lastNow = 0, scrollV = 0;
 let weights = { hero: 1, tree: 0, sculpture: 0, outro: 0 };
 const target = new THREE.Vector3();
 const idle = new THREE.Vector3();
 const look = new THREE.Vector3();
 const tmp = new THREE.Vector3();
+const fwd = new THREE.Vector3(), right = new THREE.Vector3(), upv = new THREE.Vector3();
+const cursorPoint = new THREE.Vector3();
 const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(HERO_FLOOR + 0.3));
 const floorHit = new THREE.Vector3();
 
@@ -238,12 +263,12 @@ function idleTarget(t, out) {
   // coda: a vertical ring in front of the camera framing the closing line. Its
   // circumference matches the body, so the head ends up biting its own tail.
   if (weights.outro > 0) {
-    const fwd = camera.getWorldDirection(new THREE.Vector3());
-    const right = new THREE.Vector3().crossVectors(fwd, camera.up).normalize();
-    const up = new THREE.Vector3().crossVectors(right, fwd);
+    camera.getWorldDirection(fwd);
+    right.crossVectors(fwd, camera.up).normalize();
+    upv.crossVectors(right, fwd);
     const a = t * 0.85;
     tmp.copy(camera.position).addScaledVector(fwd, 9.5)
-      .addScaledVector(right, Math.cos(a) * RING_R).addScaledVector(up, Math.sin(a) * RING_R + 0.25);
+      .addScaledVector(right, Math.cos(a) * RING_R).addScaledVector(upv, Math.sin(a) * RING_R + 0.25);
     out.addScaledVector(tmp, weights.outro);
   }
   return out;
@@ -257,6 +282,8 @@ function frame() {
   if (!timer && lastNow && now - lastNow < 120 && !document.hidden && t > 2.5) sampleCost(now - lastNow);
   lastNow = now;
 
+  scroller.update(dt);
+  readScroll();
   simulate(dt, t);
   const timing = t > 2.5 && beginGpuTimer();
   composer.render(dt);
@@ -267,7 +294,11 @@ function frame() {
 }
 
 function simulate(dt, t) {
-  scrollP += (scrollTarget - scrollP) * (1 - Math.exp(-dt * 4.5));
+  // critically damped spring: the camera accelerates and settles smoothly
+  // rather than lurching off at full speed the moment the page moves
+  const W = 6.5;
+  scrollV += (W * W * (scrollTarget - scrollP) - 2 * W * scrollV) * dt;
+  scrollP += scrollV * dt;
   velocity += ((scrollP - prevP) / Math.max(dt, 1e-3) * 2.5 - velocity) * (1 - Math.exp(-dt * 8));
   prevP = scrollP;
   weights = stationWeights(scrollP);
@@ -296,7 +327,7 @@ function simulate(dt, t) {
   charm += (active - charm) * (1 - Math.exp(-dt * 2));
   raycaster.setFromCamera(pointer.ndc, camera);
   const reach = camera.position.distanceTo(look) * 0.72;
-  const cursorPoint = raycaster.ray.at(reach, tmp.clone());
+  raycaster.ray.at(reach, cursorPoint);
   // in the hero the cursor steers across the floor rather than through the air
   floorPlane.constant = weights.sculpture > 0.5 ? -(SCULPTURE_ORIGIN.y - 2.75) : -(HERO_FLOOR + 0.3);
   if ((weights.hero > 0.5 || weights.sculpture > 0.5) && raycaster.ray.intersectPlane(floorPlane, floorHit) &&
@@ -315,9 +346,8 @@ function simulate(dt, t) {
   tree.update(dt, t, growth, scrollP > t0 - 0.08 && scrollP < anchors.sculpture[0] + 0.01);
   if (pointer.dragDx && weights.sculpture > 0.5) sculpture.drag(pointer.dragDx);
   pointer.dragDx = 0;
-  sculpture.update(dt, t, weights.sculpture > 0.001 || scrollP > anchors.tree[1] - 0.05);
-  atmosphere.update(t, camera, weights, pixelRatio);
-  moon.update(t, camera, weights.tree, growth);
+  sculpture.update(dt, t, weights.sculpture > 0.001 || scrollP > anchors.tree[1] - 0.05, 1 - smooth(0.02, 0.35, weights.outro));
+  atmosphere.update(t, camera, weights, pixelRatio, growth);
 
   lens.uniforms.uTime.value = t;
   lens.uniforms.uVel.value = velocity;
@@ -342,6 +372,7 @@ function resize() {
 addEventListener('resize', resize);
 
 const ui = initUI();
+const scroller = initSmoothScroll();
 resize();
 scrollP = prevP = scrollTarget;
 

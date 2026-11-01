@@ -93,11 +93,12 @@ export class Stage {
     // else in the reflection pass (it re-renders the whole scene otherwise)
     this.hideInReflection = [];
     const reflect = this.floor.onBeforeRender;
+    const was = [];
     this.floor.onBeforeRender = (renderer, scene, camera) => {
-      const was = this.hideInReflection.map((o) => o.visible);
-      this.hideInReflection.forEach((o) => { o.visible = false; });
+      const hide = this.hideInReflection;
+      for (let i = 0; i < hide.length; i++) { was[i] = hide[i].visible; hide[i].visible = false; }
       reflect(renderer, scene, camera);
-      this.hideInReflection.forEach((o, i) => { o.visible = was[i]; });
+      for (let i = 0; i < hide.length; i++) hide[i].visible = was[i];
     };
     this.floor.rotation.x = -Math.PI / 2;
     this.floor.position.y = floorY;

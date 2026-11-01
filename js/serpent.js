@@ -351,9 +351,9 @@ export class Serpent {
       v.addScaledVector(tangents[i], -v.dot(tangents[i]));
       if (v.lengthSq() > 0.01) normals[i].lerp(v.normalize(), blend).normalize();
       const o = i * 4;
-      this.data.set([points[i].x, points[i].y, points[i].z, 1], o);
-      this.data.set([tangents[i].x, tangents[i].y, tangents[i].z, 1], N * 4 + o);
-      this.data.set([normals[i].x, normals[i].y, normals[i].z, 1], N * 8 + o);
+      points[i].toArray(this.data, o);
+      tangents[i].toArray(this.data, N * 4 + o);
+      normals[i].toArray(this.data, N * 8 + o);
     }
     this.tex.needsUpdate = true;
     this.uniforms.uTime.value = time;
@@ -372,12 +372,18 @@ export class Serpent {
   }
 
   _placeHead(time) {
-    const P = new THREE.Vector3(), T = new THREE.Vector3(), Nn = new THREE.Vector3(), B = new THREE.Vector3();
+    // scratch objects live on the instance: no garbage per frame, no GC hitches
+    const k = this._hk || (this._hk = {
+      P: new THREE.Vector3(), T: new THREE.Vector3(), Nn: new THREE.Vector3(), B: new THREE.Vector3(),
+      X: new THREE.Vector3(), M: new THREE.Matrix4(), root: new THREE.Vector3(), mid: new THREE.Vector3(),
+      tipA: new THREE.Vector3(), tipB: new THREE.Vector3(),
+    });
+    const { P, T, Nn, B, X } = k;
     this._frameAt(0, P, T, Nn, B);
     // right-handed basis: x = N × T, y = dorsal, z = forward
-    const X = new THREE.Vector3().crossVectors(Nn, T);
+    X.crossVectors(Nn, T);
     this.head.position.copy(P);
-    this.head.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Nn, T));
+    this.head.quaternion.setFromRotationMatrix(k.M.makeBasis(X, Nn, T));
     // the head is held a little proud of the body and tastes the air as it goes
     this.head.rotateX(-0.1 + Math.sin(time * 1.3) * 0.04);
     this.head.rotateY(Math.sin(time * 0.9) * 0.06);
@@ -385,12 +391,13 @@ export class Serpent {
     const flick = Math.max(0, Math.sin(time * 5.5)) * (Math.sin(time * 0.9) > 0.2 ? 1 : 0);
     const len = 0.34 * flick;
     const wob = Math.sin(time * 40) * 0.025 * flick;
-    const root = SNOUT.clone().setZ(SNOUT.z - 0.06);
-    const mid = SNOUT.clone().setZ(SNOUT.z + len * 0.65);
-    const tipA = mid.clone().add(new THREE.Vector3(0.05 * flick + wob, -0.01, len * 0.35));
-    const tipB = mid.clone().add(new THREE.Vector3(-0.05 * flick + wob, -0.01, len * 0.35));
+    const root = k.root.copy(SNOUT).setZ(SNOUT.z - 0.06);
+    const mid = k.mid.copy(SNOUT).setZ(SNOUT.z + len * 0.65);
+    const tipA = k.tipA.copy(mid).add(X.set(0.05 * flick + wob, -0.01, len * 0.35));
+    const tipB = k.tipB.copy(mid).add(X.set(-0.05 * flick + wob, -0.01, len * 0.35));
     const arr = this.tongueGeo.attributes.position.array;
-    [root, mid, mid, tipA, mid, tipB].forEach((v, i) => v.toArray(arr, i * 3));
+    root.toArray(arr, 0); mid.toArray(arr, 3); mid.toArray(arr, 6);
+    tipA.toArray(arr, 9); mid.toArray(arr, 12); tipB.toArray(arr, 15);
     this.tongueGeo.attributes.position.needsUpdate = true;
   }
 

@@ -51,6 +51,8 @@ export function initUI() {
   const rail = $('.rail-fill'), dots = [...document.querySelectorAll('.rail-dot')];
   const ledger = $('.ledger-count'), ledgerValue = $('.ledger-value');
   const hint = $('.hint');
+  // DOM writes only when something changed: each one can cost a style recalc
+  const last = { rail: -1, active: -1, coins: -1, tree: null, hint: null };
 
   return {
     ready() {
@@ -81,14 +83,19 @@ export function initUI() {
       const mode = weights.tree > 0.6 ? 'shake' : weights.sculpture > 0.5 ? 'drag' : 'charm';
       if (label.textContent !== mode) label.textContent = mode;
 
-      rail.style.transform = `scaleY(${p})`;
+      const railP = Math.round(p * 1000) / 1000;
+      if (railP !== last.rail) { last.rail = railP; rail.style.transform = `scaleY(${railP})`; }
       const active = p > 0.93 ? 3 : weights.sculpture > 0.5 ? 2 : weights.tree > 0.5 ? 1 : 0;
-      dots.forEach((d, i) => d.classList.toggle('on', i === active));
+      if (active !== last.active) { last.active = active; dots.forEach((d, i) => d.classList.toggle('on', i === active)); }
 
-      ledger.textContent = String(coins).padStart(4, '0');
-      ledgerValue.textContent = (coins * 1288).toLocaleString('en-US');
-      document.body.classList.toggle('in-tree', weights.tree > 0.5);
-      hint.classList.toggle('show', charm < 0.2 && weights.hero > 0.5);
+      if (coins !== last.coins) {
+        last.coins = coins;
+        ledger.textContent = String(coins).padStart(4, '0');
+        ledgerValue.textContent = (coins * 1288).toLocaleString('en-US');
+      }
+      const inTree = weights.tree > 0.5, showHint = charm < 0.2 && weights.hero > 0.5;
+      if (inTree !== last.tree) { last.tree = inTree; document.body.classList.toggle('in-tree', inTree); }
+      if (showHint !== last.hint) { last.hint = showHint; hint.classList.toggle('show', showHint); }
     },
   };
 }

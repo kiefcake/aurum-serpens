@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { NOISE, ENV, GOLD } from './glsl.js';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundFragment } from './moneyTree.js';
+import { patch } from './studio.js';
 
 // A raymarched marble ouroboros on a fluted plinth, repaired with kintsugi gold.
 // It is rendered inside a proxy box: the box's fragments start rays in the
@@ -273,16 +275,74 @@ export class Sculpture {
     this.floor.position.set(origin.x, origin.y - 3.03, origin.z);
     scene.add(this.floor);
 
+    this.colonnade = this._buildColonnade(origin);
+    scene.add(this.colonnade);
+
     this.rotation = 0;
     this.velocity = 0.15;
+  }
+
+  // A ring of fluted dark-marble columns standing in the gallery's gloom, rim
+  // lit by the moonlit windows behind them: parallax and scale for the room.
+  _buildColonnade(origin) {
+    const H = 11, COUNT = 14, R = 13.5;
+    const shaft = new THREE.CylinderGeometry(0.42, 0.47, H - 0.9, 64, 8, true);
+    const p = shaft.attributes.position;
+    for (let i = 0; i < p.count; i++) {
+      const x = p.getX(i), z = p.getZ(i);
+      const a = Math.atan2(z, x);
+      const k = 1 - 0.07 * Math.max(0, Math.cos(a * 20)) ** 0.6;   // twenty flutes
+      p.setX(i, x * k);
+      p.setZ(i, z * k);
+    }
+    shaft.computeVertexNormals();
+    const base = new THREE.BoxGeometry(1.25, 0.5, 1.25).translate(0, -H / 2 + 0.25, 0);
+    const torus = new THREE.CylinderGeometry(0.6, 0.62, 0.18, 48).translate(0, -H / 2 + 0.59, 0);
+    const neck = new THREE.CylinderGeometry(0.6, 0.47, 0.25, 48).translate(0, H / 2 - 0.52, 0);
+    const abacus = new THREE.BoxGeometry(1.2, 0.3, 1.2).translate(0, H / 2 - 0.25, 0);
+    [shaft, base, torus, neck, abacus].forEach((g) => { g.deleteAttribute('uv'); });
+    const geo = mergeGeometries([shaft.toNonIndexed(), base.toNonIndexed(), torus.toNonIndexed(),
+      neck.toNonIndexed(), abacus.toNonIndexed()]);
+
+    const mat = new THREE.MeshStandardMaterial({ color: 0x8a847c, roughness: 0.3, metalness: 0, envMapIntensity: 0.25 });
+    this.roomFade = { value: 1 };
+    mat.onBeforeCompile = (shader) => {
+      shader.uniforms.uRoomFade = this.roomFade;
+      shader.vertexShader = patch(shader.vertexShader, [
+        ['#include <common>', '#include <common>\nvarying float vColY;'],
+        ['#include <begin_vertex>', `#include <begin_vertex>\nvColY = position.y / ${H.toFixed(1)} + 0.5;`],
+      ]);
+      shader.fragmentShader = patch(shader.fragmentShader, [
+        ['#include <common>', '#include <common>\nvarying float vColY;\nuniform float uRoomFade;'],
+        // fading to black reads as fading out against the dark hall
+        ['#include <opaque_fragment>', 'outgoingLight *= uRoomFade;\n#include <opaque_fragment>'],
+        // the feet sink into darkness; the capitals catch the most light
+        ['#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= mix(0.04, 1.0, smoothstep(0.0, 0.75, vColY));'],
+        ['#include <emissivemap_fragment>', `#include <emissivemap_fragment>
+          float rimC = pow(1.0 - abs(dot(normal, normalize(vViewPosition))), 3.0);
+          totalEmissiveRadiance += vec3(0.05, 0.065, 0.09) * rimC * smoothstep(0.05, 0.6, vColY);`],
+      ]);
+    };
+    const mesh = new THREE.InstancedMesh(geo, mat, COUNT);
+    const m = new THREE.Matrix4();
+    for (let i = 0; i < COUNT; i++) {
+      const a = (i / COUNT) * Math.PI * 2 + 0.11;
+      m.makeRotationY(-a).setPosition(origin.x + Math.cos(a) * R, origin.y - 3.03 + H / 2, origin.z + Math.sin(a) * R);
+      mesh.setMatrixAt(i, m);
+    }
+    mesh.computeBoundingSphere();
+    return mesh;
   }
 
   drag(dx) {
     this.velocity = dx * 0.35;
   }
 
-  update(dt, time, visible) {
+  // the colonnade is the gallery's room: it leaves once the camera pulls out for the coda
+  update(dt, time, visible, room = 1) {
     this.group.visible = this.shaft.visible = this.floor.visible = visible;
+    this.colonnade.visible = visible && room > 0.01;
+    this.roomFade.value = room;
     this.velocity += (0.12 - this.velocity) * (1 - Math.exp(-dt * 1.2));
     this.rotation += this.velocity * dt;
     this.group.rotation.y = this.rotation;
