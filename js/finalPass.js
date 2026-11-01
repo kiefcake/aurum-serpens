@@ -23,15 +23,15 @@ export const FinalShader = {
       float v = clamp(uVel, -1.0, 1.0);
       vec2 uv = 0.5 + c * (1.0 - abs(v) * 0.22 * r2);
       uv.y += v * 0.012 * sin(vUv.x * 3.1416);
-      vec2 dir = c * (0.0025 + abs(v) * 0.008);
+      vec2 dir = c * (0.0008 + abs(v) * 0.004);
       vec3 col;
       col.r = texture2D(tDiffuse, uv + dir).r;
       col.g = texture2D(tDiffuse, uv).g;
       col.b = texture2D(tDiffuse, uv - dir).b;
       float vig = smoothstep(0.9, 0.25, length(c * vec2(1.0, 0.8)));
-      col *= mix(0.3, 1.0, vig);
+      col *= mix(0.5, 1.0, vig);
       float g = hash(vUv * uRes + fract(uTime * 7.0) * 113.0) - 0.5;
-      col += g * 0.04 * (0.25 + col);
+      col += g * 0.018 * (0.2 + col);
       gl_FragColor = vec4(max(col, 0.0), 1.0);
     }
   `,

@@ -1,10 +1,13 @@
 import * as THREE from 'three';
-import { NOISE, ENV, GOLD, SWAY } from './glsl.js';
+import { NOISE, GOLD, SWAY } from './glsl.js';
+import { BUMP, patch } from './studio.js';
 
-// A procedurally grown 摇钱树 (money tree). Branches are generated recursively,
-// every ring of every branch is stamped with a "birth" time, and the vertex
-// shader grows the tree by sliding each ring out from its parent as uGrowth rises.
-// Leaves are square-holed coins hanging on the outer twigs.
+// A procedurally grown 摇钱树 (money tree) in the manner of Han-dynasty tomb
+// bronzes: verdigris-patinated bronze limbs inlaid with gold, hung with
+// square-holed coins. Branches are generated recursively and every ring is
+// stamped with a birth time; the vertex shader grows the tree by sliding each
+// ring out from its parent as uGrowth rises. All surfaces are patched
+// MeshPhysical/Standard materials so they sit in the same studio lighting.
 
 function mulberry32(a) {
   return () => {
@@ -16,9 +19,55 @@ function mulberry32(a) {
 }
 
 const MAX_DEPTH = 5;
-const SIDES = 9;
+const SIDES = 10;
 
-const barkVertex = /* glsl */ `
+// ------------------------------------------------------------------ coin face
+// Height map for the coin caps: raised rim, raised frame around the square hole
+// and four characters, softened so the bump reads as a cast bevel.
+function coinFaceTexture() {
+  const S = 512;
+  const raw = document.createElement('canvas');
+  raw.width = raw.height = S;
+  const out = document.createElement('canvas');
+  out.width = out.height = S;
+  const tex = new THREE.CanvasTexture(out);
+  tex.colorSpace = THREE.NoColorSpace;
+  tex.anisotropy = 8;
+
+  const draw = () => {
+    const c = raw.getContext('2d');
+    const m = S / 2;
+    c.fillStyle = '#000';
+    c.fillRect(0, 0, S, S);
+    c.fillStyle = '#5c5c5c';
+    c.beginPath(); c.arc(m, m, m, 0, Math.PI * 2); c.fill();
+    c.strokeStyle = '#fff';
+    c.lineWidth = S * 0.07;
+    c.beginPath(); c.arc(m, m, m - S * 0.045, 0, Math.PI * 2); c.stroke();
+    const hole = S * 0.085, frame = S * 0.14;
+    c.fillStyle = '#fff';
+    c.fillRect(m - frame, m - frame, frame * 2, frame * 2);
+    c.fillStyle = '#000';
+    c.fillRect(m - hole, m - hole, hole * 2, hole * 2);
+    c.fillStyle = '#e8e8e8';
+    c.font = `700 ${S * 0.2}px "Noto Serif TC", "Songti TC", "PMingLiU", "SimSun", serif`;
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    const off = S * 0.285;
+    [['招', 0, -off], ['財', 0, off], ['進', off, 0], ['寶', -off, 0]]
+      .forEach(([ch, x, y]) => c.fillText(ch, m + x, m + y + S * 0.01));
+    const o = out.getContext('2d');
+    o.filter = `blur(${S * 0.005}px)`;
+    o.drawImage(raw, 0, 0);
+    tex.needsUpdate = true;
+  };
+  draw();
+  if (document.fonts) document.fonts.load(`700 40px "Noto Serif TC"`, '招財進寶').then(draw).catch(() => {});
+  return tex;
+}
+
+// --------------------------------------------------------------------- shaders
+const BARK_VERT_HEAD = /* glsl */ `
 attribute vec3 aCenter;
 attribute vec3 aPrev;
 attribute vec3 aPrev2;
@@ -28,10 +77,10 @@ attribute float aPrev2Birth;
 attribute float aRadius;
 uniform float uGrowth;
 uniform float uTime;
-varying vec3 vN;
-varying vec3 vW;
+varying vec3 vWPos;
 ${SWAY}
-void main(){
+`;
+const BARK_VERT = /* glsl */ `
   vec3 c;
   float thick;
   if (uGrowth >= aBirth){
@@ -47,141 +96,122 @@ void main(){
     c = mix(aPrev2, aPrev, t);
     thick = 0.0;
   }
-  vec3 p = c + swayOffset(c, uTime) + normal * aRadius * thick;
-  vec4 w = modelMatrix * vec4(p, 1.0);
-  vW = w.xyz;
-  vN = normalize(mat3(modelMatrix) * normal);
-  gl_Position = projectionMatrix * viewMatrix * w;
-}
+  vec3 transformed = c + swayOffset(c, uTime) + normal * aRadius * thick;
+  vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
 `;
-
-const barkFragment = /* glsl */ `
+const BARK_FRAG_HEAD = /* glsl */ `
 uniform float uTime;
-varying vec3 vN;
-varying vec3 vW;
+varying vec3 vWPos;
 ${NOISE}
-${ENV}
-void main(){
-  vec3 n = normalize(vN);
-  vec3 V = normalize(cameraPosition - vW);
-  vec3 L = normalize(vec3(0.4, 0.9, 0.5));
-  float f = fbm(vW * vec3(2.4, 0.5, 2.4));
-  float ridge = abs(sin(f * 16.0));
-  vec3 bark = mix(vec3(0.025, 0.016, 0.01), vec3(0.17, 0.09, 0.035), ridge);
-  float vein = smoothstep(0.022, 0.0, abs(fbm(vW * 1.1 + 3.0) - 0.5));
-  float diff = max(dot(n, L), 0.0) * 0.85 + 0.15;
-  vec3 env = studioEnv(reflect(-V, n));
-  vec3 gold = ${GOLD};
-  vec3 col = bark * diff + env * bark * 0.6;
-  col = mix(col, gold * env * 0.7 + gold * 0.25, vein);
-  // sap of light climbing the gold veins
-  float pulse = pow(0.5 + 0.5 * sin(vW.y * 1.2 - uTime * 2.2), 10.0);
-  col += gold * vein * pulse * 3.0;
-  col += pow(1.0 - max(dot(n, V), 0.0), 3.0) * vec3(0.9, 0.5, 0.15) * 0.4;
-  gl_FragColor = vec4(col, 1.0);
-}
+${BUMP}
+`;
+const BARK_FRAG = /* glsl */ `
+  float n1 = fbm(vWPos * 1.3);
+  float n2 = fbm(vWPos * vec3(6.0, 1.4, 6.0));
+  float patina = smoothstep(0.4, 0.62, n1 + (n2 - 0.5) * 0.5);
+  float vein = smoothstep(0.018, 0.0, abs(fbm(vWPos * 0.9 + 3.0) - 0.5)) * (1.0 - patina);
+  vec3 bronze = vec3(0.5, 0.29, 0.14) * (0.8 + 0.4 * n2);
+  vec3 verd = mix(vec3(0.09, 0.3, 0.25), vec3(0.3, 0.58, 0.48), n2);
+  diffuseColor.rgb = mix(mix(bronze, verd, patina), ${GOLD}, vein);
+  float sMetal = mix(mix(0.92, 0.0, patina), 1.0, vein);
+  float sRough = mix(mix(0.38, 0.88, patina), 0.14, vein);
+  float sHeight = n2 * 0.8 + patina * 0.6 - vein * 0.4;
+  float pulse = pow(0.5 + 0.5 * sin(vWPos.y * 1.2 - uTime * 2.0), 12.0);
 `;
 
-// Shared by hanging and falling coins.
-export const coinFragment = /* glsl */ `
-varying vec3 vN;
-varying vec3 vW;
-varying vec2 vUv;
+const COIN_VERT_HEAD = /* glsl */ `
+uniform float uGrowth;
+uniform float uTime;
+uniform float uRain;
+varying vec2 vCUv;
 varying float vCap;
-varying float vJade;
-${NOISE}
-${ENV}
-void main(){
-  vec2 q = vUv - 0.5;
-  float sq = max(abs(q.x), abs(q.y));
-  bool cap = vCap > 0.5;
-  if (cap && sq < 0.085) discard;
-  float r = length(q) * 2.0;
-  float rim = smoothstep(0.8, 0.85, r) * (1.0 - smoothstep(0.95, 1.0, r));
-  float frame = smoothstep(0.085, 0.1, sq) * (1.0 - smoothstep(0.13, 0.145, sq));
-  float ang = atan(q.y, q.x) + 0.785398;
-  float quadrant = floor(ang / 1.570796);
-  float glyph = step(0.55, vnoise(vec3(q * 26.0, quadrant * 7.0)))
-              * step(0.26, r) * step(r, 0.7);
-  float emboss = cap ? max(max(rim, frame), glyph * 0.8) : 0.6;
-
-  vec3 n = normalize(vN);
-  if (!gl_FrontFacing) n = -n;
-  vec3 V = normalize(cameraPosition - vW);
-  vec3 env = studioEnv(reflect(-V, n));
-  vec3 base = mix(${GOLD}, vec3(0.1, 0.55, 0.32), vJade);
-  vec3 col = base * env * (0.45 + 0.75 * emboss);
-  col += base * max(dot(n, normalize(vec3(0.4, 0.9, 0.5))), 0.0) * 0.25;
-  col += pow(1.0 - max(dot(n, V), 0.0), 3.0) * base * 0.6;
-  gl_FragColor = vec4(col, 1.0);
-}
+varying float vKind;
+mat3 rotX(float a){ float c = cos(a), s = sin(a); return mat3(1,0,0, 0,c,s, 0,-s,c); }
+mat3 rotY(float a){ float c = cos(a), s = sin(a); return mat3(c,0,-s, 0,1,0, s,0,c); }
+mat3 rotZ(float a){ float c = cos(a), s = sin(a); return mat3(c,s,0, -s,c,0, 0,0,1); }
 `;
-
-const hangingVertex = /* glsl */ `
+const HANGING_HEAD = /* glsl */ `
 attribute float aBirth;
 attribute float aPhase;
 attribute vec3 aAnchor;
-uniform float uGrowth;
-uniform float uTime;
-varying vec3 vN;
-varying vec3 vW;
-varying vec2 vUv;
-varying float vCap;
-varying float vJade;
 ${SWAY}
-mat3 rotY(float a){ float c = cos(a), s = sin(a); return mat3(c,0,-s, 0,1,0, s,0,c); }
-mat3 rotZ(float a){ float c = cos(a), s = sin(a); return mat3(c,s,0, -s,c,0, 0,0,1); }
-void main(){
-  float s = clamp((uGrowth - aBirth) / 0.05, 0.0, 1.0);
-  float pop = s * (1.0 + sin(s * 9.0) * exp(-s * 4.0) * 0.7);
-  float spin = uTime * (0.5 + aPhase * 0.9) + aPhase * 40.0;
-  mat3 R = rotY(spin);
-  vec3 p = R * (position * pop);
-  float swing = sin(uTime * 1.7 + aPhase * 12.0) * (0.25 + uShake * 0.9);
-  vec3 c = aAnchor + rotZ(swing) * vec3(0.0, -0.24, 0.0);
-  vec3 lp = c + p + swayOffset(aAnchor, uTime);
-  vec4 w = modelMatrix * vec4(lp, 1.0);
-  vW = w.xyz;
-  vN = normalize(mat3(modelMatrix) * (R * normal));
-  vUv = uv;
-  vCap = abs(normal.z);
-  vJade = step(0.93, aPhase);
-  gl_Position = projectionMatrix * viewMatrix * w;
-}
 `;
-
-const fallingVertex = /* glsl */ `
+const HANGING_NORMAL = /* glsl */ `
+  float cs = clamp((uGrowth - aBirth) / 0.05, 0.0, 1.0);
+  float pop = cs * (1.0 + sin(cs * 9.0) * exp(-cs * 4.0) * 0.7);
+  mat3 cR = rotY(uTime * (0.4 + aPhase * 0.7) + aPhase * 40.0);
+  vec3 objectNormal = cR * normal;
+  vKind = aPhase > 0.93 ? 1.0 : (aPhase > 0.8 ? 2.0 : 0.0);
+`;
+const HANGING_POS = /* glsl */ `
+  float swing = sin(uTime * 1.7 + aPhase * 12.0) * (0.22 + uShake * 0.9);
+  vec3 cc = aAnchor + rotZ(swing) * vec3(0.0, -0.2, 0.0);
+  vec3 transformed = cc + cR * (position * pop) + swayOffset(aAnchor, uTime);
+  vCUv = uv;
+  vCap = abs(normal.z);
+`;
+const FALLING_HEAD = /* glsl */ `
 attribute vec3 aStart;
 attribute float aSeed;
-uniform float uTime;
-uniform float uRain;
-uniform float uGrowth;
-varying vec3 vN;
-varying vec3 vW;
-varying vec2 vUv;
-varying float vCap;
-varying float vJade;
-mat3 rotX(float a){ float c = cos(a), s = sin(a); return mat3(1,0,0, 0,c,s, 0,-s,c); }
-mat3 rotY(float a){ float c = cos(a), s = sin(a); return mat3(c,0,-s, 0,1,0, s,0,c); }
-void main(){
+`;
+const FALLING_NORMAL = /* glsl */ `
   float life = fract(uTime * 0.16 * (0.7 + aSeed * 0.6) + aSeed * 7.31);
   float on = step(aSeed, uRain) * smoothstep(0.0, 0.04, life) * smoothstep(1.0, 0.92, life)
            * smoothstep(0.85, 1.0, uGrowth);
-  mat3 R = rotY(life * 9.0 + aSeed * 30.0) * rotX(life * 17.0 + aSeed * 11.0);
-  vec3 c = aStart;
-  c.y = mix(aStart.y, 0.04, pow(life, 1.7));
-  c.x += sin(life * 7.0 + aSeed * 40.0) * 0.7;
-  c.z += cos(life * 5.0 + aSeed * 23.0) * 0.7;
-  vec3 lp = c + R * position * on;
-  vec4 w = modelMatrix * vec4(lp, 1.0);
-  vW = w.xyz;
-  vN = normalize(mat3(modelMatrix) * (R * normal));
-  vUv = uv;
-  vCap = abs(normal.z);
-  vJade = step(0.95, fract(aSeed * 13.7));
-  gl_Position = projectionMatrix * viewMatrix * w;
-}
+  mat3 cR = rotY(life * 9.0 + aSeed * 30.0) * rotX(life * 17.0 + aSeed * 11.0);
+  vec3 objectNormal = cR * normal;
+  vKind = fract(aSeed * 13.7) > 0.93 ? 1.0 : 0.0;
 `;
+const FALLING_POS = /* glsl */ `
+  vec3 cc = aStart;
+  cc.y = mix(aStart.y, 0.04, pow(life, 1.7));
+  cc.x += sin(life * 7.0 + aSeed * 40.0) * 0.7;
+  cc.z += cos(life * 5.0 + aSeed * 23.0) * 0.7;
+  vec3 transformed = cc + cR * position * on;
+  vCUv = uv;
+  vCap = abs(normal.z);
+`;
+const COIN_FRAG_HEAD = /* glsl */ `
+uniform sampler2D uCoinFace;
+varying vec2 vCUv;
+varying float vCap;
+varying float vKind;
+${BUMP}
+`;
+const COIN_FRAG = /* glsl */ `
+  vec2 cq = vCUv - 0.5;
+  bool cap = vCap > 0.5;
+  if (cap && max(abs(cq.x), abs(cq.y)) < 0.085) discard;
+  float sHeight = cap ? texture2D(uCoinFace, vCUv).r : 0.6 + 0.4 * step(0.5, fract(vCUv.x * 160.0));
+  vec3 cGold = vec3(1.0, 0.72, 0.33);
+  vec3 cJade = vec3(0.05, 0.42, 0.24);
+  vec3 cBronze = mix(vec3(0.45, 0.27, 0.13), vec3(0.18, 0.45, 0.38), smoothstep(0.55, 0.3, sHeight));
+  vec3 base = vKind > 1.5 ? cBronze : (vKind > 0.5 ? cJade : cGold);
+  diffuseColor.rgb = base * (0.7 + 0.3 * sHeight);
+  float sMetal = vKind > 1.5 ? 0.7 : (vKind > 0.5 ? 0.0 : 1.0);
+  float sRough = vKind > 0.5 ? (vKind > 1.5 ? 0.6 : 0.1) : mix(0.42, 0.12, smoothstep(0.4, 0.8, sHeight));
+`;
+
+function physical(params, { uniforms, vertHead, vertNormal, vertPos, fragHead, fragBody, bump }) {
+  const m = new THREE.MeshPhysicalMaterial(params);
+  m.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, uniforms);
+    shader.vertexShader = patch(shader.vertexShader, [
+      ['#include <common>', '#include <common>\n' + vertHead],
+      ...(vertNormal ? [['#include <beginnormal_vertex>', vertNormal]] : []),
+      ['#include <begin_vertex>', vertPos],
+    ]);
+    shader.fragmentShader = patch(shader.fragmentShader, [
+      ['#include <common>', '#include <common>\n' + fragHead],
+      ['#include <color_fragment>', '#include <color_fragment>\n' + fragBody],
+      ['#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\nroughnessFactor = sRough;'],
+      ['#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\nmetalnessFactor = sMetal;'],
+      ['#include <normal_fragment_maps>',
+        `#include <normal_fragment_maps>\nnormal = perturbFromHeight(-vViewPosition, normal, sHeight, ${bump});`],
+    ]);
+  };
+  return m;
+}
 
 const groundVertex = /* glsl */ `
 varying vec3 vW;
@@ -203,17 +233,17 @@ ${NOISE}
 void main(){
   vec2 q = vUv - 0.5;
   float r = length(q) * 2.0;
-  float marble = fbm(vec3(q * 6.0, 1.0));
-  vec3 col = mix(vec3(0.012, 0.01, 0.009), vec3(0.05, 0.04, 0.035), marble) * uTint;
-  // engraved gold rings
-  float rings = smoothstep(0.475, 0.495, abs(fract(r * 6.0) - 0.5)) * step(r, 0.84);
+  float marble = fbm(vec3(q * 7.0, 1.0));
+  vec3 col = mix(vec3(0.006, 0.005, 0.0045), vec3(0.03, 0.026, 0.022), marble) * uTint;
+  vec3 V = normalize(cameraPosition - vW);
+  col += vec3(0.05, 0.035, 0.02) * pow(1.0 - max(V.y, 0.0), 4.0) * uTint;
+  float rings = smoothstep(0.482, 0.497, abs(fract(r * 6.0) - 0.5)) * step(r, 0.84);
   float ang = atan(q.y, q.x);
-  float ticks = step(0.92, fract(ang * 36.0 / 6.2831)) * step(0.7, r) * step(r, 0.78);
-  float glow = 0.6 + 0.4 * sin(uTime * 1.5 - r * 12.0);
-  col += ${GOLD} * (rings + ticks) * (0.25 + glow * 0.45) * uGlow;
-  // contact shadow
-  col *= mix(0.25, 1.0, smoothstep(0.02, 0.22, r));
-  float alpha = smoothstep(1.0, 0.55, r);
+  float ticks = step(0.94, fract(ang * 48.0 / 6.2831)) * step(0.7, r) * step(r, 0.76);
+  float glow = 0.6 + 0.4 * sin(uTime * 1.2 - r * 10.0);
+  col += ${GOLD} * (rings + ticks) * (0.12 + glow * 0.22) * uGlow;
+  col *= mix(0.2, 1.0, smoothstep(0.02, 0.2, r));
+  float alpha = smoothstep(1.0, 0.5, r);
   gl_FragColor = vec4(col, alpha);
 }
 `;
@@ -234,32 +264,31 @@ export class MoneyTree {
     };
 
     const grow = (start, dir, len, rad, depth, birth, opts = {}) => {
-      const segs = depth < 2 ? 12 : 7;
+      const segs = depth < 2 ? 14 : 8;
       const pts = [start.clone()], radii = [rad], births = [birth];
       const d = dir.clone();
       let p = start.clone();
       for (let i = 1; i <= segs; i++) {
-        d.x += (rng() - 0.5) * 0.22 * (depth + 1) * 0.5;
-        d.z += (rng() - 0.5) * 0.22 * (depth + 1) * 0.5;
-        d.y += opts.root ? -0.06 : 0.035;
+        d.x += (rng() - 0.5) * 0.2 * (depth + 1) * 0.5;
+        d.z += (rng() - 0.5) * 0.2 * (depth + 1) * 0.5;
+        d.y += opts.root ? -0.06 : 0.03;
         d.normalize();
         p = p.clone().addScaledVector(d, len / segs);
         pts.push(p);
         radii.push(rad * (1 - 0.5 * (i / segs)));
         births.push(birth + (len * i) / segs);
       }
-      // closing tip ring
       pts.push(p.clone().addScaledVector(d, rad * 0.4));
       radii.push(0.001);
       births.push(births[births.length - 1] + rad * 0.4);
       branches.push({ pts, radii, births });
       if (opts.root) return;
 
-      if (depth >= MAX_DEPTH - 2) {
+      if (depth >= MAX_DEPTH - 1) {
         for (let i = 2; i <= segs; i++) {
-          if (rng() < 0.5 + 0.12 * (depth - 2)) {
+          if (rng() < 0.42 + 0.15 * (depth - 3)) {
             leaves.push({
-              anchor: pts[i].clone().add(new THREE.Vector3((rng() - 0.5) * 0.12, -0.02, (rng() - 0.5) * 0.12)),
+              anchor: pts[i].clone().add(new THREE.Vector3((rng() - 0.5) * 0.1, -0.02, (rng() - 0.5) * 0.1)),
               birth: births[i] + 0.4 + rng() * 0.6,
               phase: rng(),
             });
@@ -278,11 +307,11 @@ export class MoneyTree {
         const perp = perpendicular(base).applyAxisAngle(base, azimuth0 + (c / count) * Math.PI * 2 + rng() * 0.6);
         const spread = 0.42 + rng() * 0.45;
         const cd = base.clone().multiplyScalar(Math.cos(spread)).addScaledVector(perp, Math.sin(spread)).normalize();
-        grow(pts[si], cd, len * (0.66 + rng() * 0.14), radii[si] * 0.74, depth + 1, births[si]);
+        grow(pts[si], cd, len * (0.66 + rng() * 0.14), radii[si] * 0.72, depth + 1, births[si]);
       }
     };
 
-    grow(new THREE.Vector3(0, -0.2, 0), new THREE.Vector3(0, 1, 0), 5.2, 0.62, 0, 0);
+    grow(new THREE.Vector3(0, -0.2, 0), new THREE.Vector3(0, 1, 0), 5.2, 0.6, 0, 0);
     for (let k = 0; k < 6; k++) {
       const a = (k / 6) * Math.PI * 2 + rng() * 0.4;
       grow(new THREE.Vector3(0, 0.5, 0), new THREE.Vector3(Math.cos(a), -0.35, Math.sin(a)).normalize(),
@@ -295,6 +324,14 @@ export class MoneyTree {
     );
     this.coinCount = leaves.length;
     this.leafBirths = leaves.map((l) => l.birth / maxBirth).sort((a, b) => a - b);
+
+    this.uniforms = {
+      uGrowth: { value: 0 },
+      uTime: { value: 0 },
+      uShake: { value: 0 },
+      uRain: { value: 0.1 },
+      uCoinFace: { value: coinFaceTexture() },
+    };
 
     this._buildBark(branches, maxBirth);
     this._buildCoins(leaves, maxBirth);
@@ -312,9 +349,8 @@ export class MoneyTree {
     let vbase = 0;
     for (const b of branches) {
       const n = b.pts.length;
-      // parallel-transported frames
       let T = new THREE.Vector3().subVectors(b.pts[1], b.pts[0]).normalize();
-      let Nn = new THREE.Vector3(1, 0, 0);
+      const Nn = new THREE.Vector3(1, 0, 0);
       Nn.addScaledVector(T, -Nn.dot(T));
       if (Nn.lengthSq() < 0.01) Nn.set(0, 0, 1).addScaledVector(T, -T.z);
       Nn.normalize();
@@ -362,29 +398,48 @@ export class MoneyTree {
     g.setAttribute('aRadius', f1(Rad));
     g.setIndex(idx);
 
-    this.uniforms = {
-      uGrowth: { value: 0 },
-      uTime: { value: 0 },
-      uShake: { value: 0 },
-      uRain: { value: 0.1 },
-    };
-    this.bark = new THREE.Mesh(g, new THREE.ShaderMaterial({
-      vertexShader: barkVertex,
-      fragmentShader: barkFragment,
+    const mat = physical({ color: 0xffffff, metalness: 1, roughness: 0.4, side: THREE.DoubleSide }, {
       uniforms: this.uniforms,
-    }));
+      vertHead: BARK_VERT_HEAD,
+      vertPos: BARK_VERT,
+      fragHead: BARK_FRAG_HEAD,
+      fragBody: BARK_FRAG,
+      bump: '0.06',
+    });
+    // gold inlay carries a slow pulse of light up the trunk
+    const compile = mat.onBeforeCompile;
+    mat.onBeforeCompile = (shader) => {
+      compile(shader);
+      shader.fragmentShader = patch(shader.fragmentShader, [[
+        '#include <emissivemap_fragment>',
+        `#include <emissivemap_fragment>\ntotalEmissiveRadiance += ${GOLD} * vein * pulse * 1.6;`,
+      ]]);
+    };
+    this.bark = new THREE.Mesh(g, mat);
     this.bark.frustumCulled = false;
     this.group.add(this.bark);
   }
 
   _coinGeometry(size) {
-    const geo = new THREE.CylinderGeometry(size, size, size * 0.16, 32, 1);
+    const geo = new THREE.CylinderGeometry(size, size, size * 0.14, 40, 1);
     geo.rotateX(Math.PI / 2);
     return geo;
   }
 
+  _coinMaterial(vertHead, vertNormal, vertPos) {
+    return physical({ color: 0xffffff, metalness: 1, roughness: 0.3, clearcoat: 0.3, clearcoatRoughness: 0.2, side: THREE.DoubleSide }, {
+      uniforms: this.uniforms,
+      vertHead: COIN_VERT_HEAD + vertHead,
+      vertNormal,
+      vertPos,
+      fragHead: COIN_FRAG_HEAD,
+      fragBody: COIN_FRAG,
+      bump: '0.0045',
+    });
+  }
+
   _buildCoins(leaves, maxBirth) {
-    const geo = this._coinGeometry(0.15);
+    const geo = this._coinGeometry(0.13);
     const n = leaves.length;
     const birth = new Float32Array(n), phase = new Float32Array(n), anchor = new Float32Array(n * 3);
     leaves.forEach((l, i) => {
@@ -395,19 +450,14 @@ export class MoneyTree {
     geo.setAttribute('aBirth', new THREE.InstancedBufferAttribute(birth, 1));
     geo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(phase, 1));
     geo.setAttribute('aAnchor', new THREE.InstancedBufferAttribute(anchor, 3));
-    this.coins = new THREE.InstancedMesh(geo, new THREE.ShaderMaterial({
-      vertexShader: hangingVertex,
-      fragmentShader: coinFragment,
-      uniforms: this.uniforms,
-      side: THREE.DoubleSide,
-    }), n);
+    this.coins = new THREE.InstancedMesh(geo, this._coinMaterial(HANGING_HEAD, HANGING_NORMAL, HANGING_POS), n);
     this.coins.frustumCulled = false;
     this.group.add(this.coins);
   }
 
   _buildRain(rng) {
     const n = 320;
-    const geo = this._coinGeometry(0.13);
+    const geo = this._coinGeometry(0.12);
     const start = new Float32Array(n * 3), seed = new Float32Array(n);
     for (let i = 0; i < n; i++) {
       const a = rng() * Math.PI * 2, r = Math.sqrt(rng()) * 5.5;
@@ -418,41 +468,39 @@ export class MoneyTree {
     }
     geo.setAttribute('aStart', new THREE.InstancedBufferAttribute(start, 3));
     geo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seed, 1));
-    this.rainMesh = new THREE.InstancedMesh(geo, new THREE.ShaderMaterial({
-      vertexShader: fallingVertex,
-      fragmentShader: coinFragment,
-      uniforms: this.uniforms,
-      side: THREE.DoubleSide,
-    }), n);
+    this.rainMesh = new THREE.InstancedMesh(geo, this._coinMaterial(FALLING_HEAD, FALLING_NORMAL, FALLING_POS), n);
     this.rainMesh.frustumCulled = false;
     this.group.add(this.rainMesh);
   }
 
   _buildGround() {
-    const g = new THREE.CircleGeometry(13, 96);
+    const g = new THREE.CircleGeometry(14, 128);
     g.rotateX(-Math.PI / 2);
-    this.groundUniforms = { uTime: { value: 0 }, uGlow: { value: 0 }, uTint: { value: new THREE.Color(1, 0.85, 0.7) } };
-    const m = new THREE.Mesh(g, new THREE.ShaderMaterial({
+    this.groundUniforms = { uTime: { value: 0 }, uGlow: { value: 0 }, uTint: { value: new THREE.Color(1, 0.88, 0.75) } };
+    this.group.add(new THREE.Mesh(g, new THREE.ShaderMaterial({
       vertexShader: groundVertex,
       fragmentShader: groundFragment,
       uniforms: this.groundUniforms,
       transparent: true,
-    }));
-    this.group.add(m);
+    })));
   }
 
   // A heap of coins at the roots that accumulates as the tree grows.
   _buildPile(rng) {
-    const n = 420;
-    const geo = new THREE.CylinderGeometry(0.15, 0.15, 0.025, 24);
-    const mat = new THREE.MeshStandardMaterial({ color: 0xffb347, metalness: 1, roughness: 0.28 });
+    const n = 520;
+    const geo = new THREE.CylinderGeometry(0.13, 0.13, 0.02, 32);
+    const face = this.uniforms.uCoinFace.value;
+    const mat = new THREE.MeshPhysicalMaterial({
+      color: 0xffb95c, metalness: 1, roughness: 0.28,
+      bumpMap: face, bumpScale: 2.5, alphaMap: face, alphaTest: 0.12,
+    });
     this.pile = new THREE.InstancedMesh(geo, mat, n);
     const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler();
     for (let i = 0; i < n; i++) {
       const a = rng() * Math.PI * 2;
-      const r = 0.8 + Math.pow(rng(), 1.6) * 3.8;
-      const h = Math.max(0, 0.55 - r * 0.12) * rng() + 0.012;
-      e.set((rng() - 0.5) * 0.7, rng() * 6, (rng() - 0.5) * 0.7);
+      const r = 0.75 + Math.pow(rng(), 1.7) * 3.6;
+      const h = Math.max(0, 0.5 - r * 0.12) * rng() + 0.012;
+      e.set((rng() - 0.5) * 0.6, rng() * 6, (rng() - 0.5) * 0.6);
       q.setFromEuler(e);
       m.compose(new THREE.Vector3(Math.cos(a) * r, h, Math.sin(a) * r), q, new THREE.Vector3(1, 1, 1));
       this.pile.setMatrixAt(i, m);

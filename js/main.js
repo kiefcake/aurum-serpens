@@ -4,16 +4,18 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Serpent } from './serpent.js';
 import { MoneyTree } from './moneyTree.js';
 import { Sculpture } from './sculpture.js';
 import { Atmosphere } from './atmosphere.js';
+import { Stage } from './stage.js';
+import { createStudioEnvironment } from './studio.js';
 import { FinalShader } from './finalPass.js';
 import { initUI } from './ui.js';
 
 const TREE_ORIGIN = new THREE.Vector3(0, -44, 0);
 const SCULPTURE_ORIGIN = new THREE.Vector3(0, -86, 0);
+const HERO_FLOOR = -2;
 
 const canvas = document.getElementById('gl');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
@@ -21,10 +23,13 @@ const pixelRatio = Math.min(window.devicePixelRatio, 1.75);
 renderer.setPixelRatio(pixelRatio);
 renderer.setSize(innerWidth, innerHeight);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.05;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
-scene.environment = new THREE.PMREMGenerator(renderer).fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environment = createStudioEnvironment(renderer);
+const key = new THREE.DirectionalLight(0xffe0b0, 0.7);
+key.position.set(4, 9, 6);
+scene.add(key);
 const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.05, 1200);
 camera.position.set(0, 0, 14);
 
@@ -32,10 +37,15 @@ const atmosphere = new Atmosphere(scene);
 const tree = new MoneyTree(scene, TREE_ORIGIN);
 const sculpture = new Sculpture(scene, SCULPTURE_ORIGIN);
 const serpent = new Serpent(scene);
+const stage = new Stage(scene, HERO_FLOOR);
+const shadowSamples = stage.shadowSamples;
 
-const composer = new EffectComposer(renderer);
+const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * pixelRatio, innerHeight * pixelRatio, {
+  type: THREE.HalfFloatType,
+  samples: 4,
+}));
 composer.addPass(new RenderPass(scene, camera));
-const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.7, 0.6, 0.92);
+const bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.35, 1.1);
 composer.addPass(bloom);
 const lens = new ShaderPass(FinalShader);
 composer.addPass(lens);
@@ -57,7 +67,7 @@ function buildRig() {
   anchors = { tree: span(sections.tree), sculpture: span(sections.sculpture), outro: span(sections.outro) };
 
   const T = TREE_ORIGIN, S = SCULPTURE_ORIGIN;
-  const keys = [[0, [0, 0, 14], [0, 0, 0]]];
+  const keys = [[0, [0, 4.8, 10.5], [0, -1.1, 0]]];
   const [t0, t1] = anchors.tree;
   for (let i = 0; i <= 4; i++) {
     const a = -0.35 + (i / 4) * 2.2;
@@ -123,6 +133,8 @@ const target = new THREE.Vector3();
 const idle = new THREE.Vector3();
 const look = new THREE.Vector3();
 const tmp = new THREE.Vector3();
+const floorPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), -(HERO_FLOOR + 0.3));
+const floorHit = new THREE.Vector3();
 
 function readScroll() {
   const max = Math.max(1, document.documentElement.scrollHeight - innerHeight);
@@ -132,8 +144,8 @@ addEventListener('scroll', readScroll, { passive: true });
 
 function idleTarget(t, out) {
   out.set(0, 0, 0);
-  // hero: lazy figure-eight in front of the camera
-  tmp.set(Math.sin(t * 0.45) * 4.2, Math.sin(t * 0.9) * 1.6 - 0.3, Math.cos(t * 0.45) * 1.5);
+  // hero: a lazy figure-eight across the lacquer floor
+  tmp.set(Math.sin(t * 0.4) * 4.2, HERO_FLOOR + 0.3, Math.sin(t * 0.8) * 1.8 + 0.8);
   out.addScaledVector(tmp, weights.hero);
   // tree: spiral up and down the trunk so the body coils around it
   const h = 1.5 + 5.5 * (0.5 - 0.5 * Math.cos(t * 0.22));
@@ -176,8 +188,16 @@ function frame() {
   raycaster.setFromCamera(pointer.ndc, camera);
   const reach = camera.position.distanceTo(look) * 0.72;
   const cursorPoint = raycaster.ray.at(reach, tmp.clone());
+  // in the hero the cursor steers across the floor rather than through the air
+  if (weights.hero > 0.5 && raycaster.ray.intersectPlane(floorPlane, floorHit) &&
+      floorHit.distanceTo(camera.position) < 30) {
+    cursorPoint.lerp(floorHit, THREE.MathUtils.smoothstep(weights.hero, 0.5, 0.9));
+  }
   target.copy(idleTarget(t, idle)).lerp(cursorPoint, charm);
-  serpent.update(dt, t, target, camera.position);
+  const grounded = THREE.MathUtils.smoothstep(weights.hero, 0.6, 1);
+  serpent.update(dt, t, target, camera.position, grounded);
+  serpent.sampleSpine(shadowSamples, shadowSamples.length);
+  stage.update(t, weights.hero > 0.01);
 
   const [t0, t1] = anchors.tree;
   const growth = THREE.MathUtils.clamp((scrollP - (t0 - 0.04)) / ((t1 - t0) * 0.85 + 0.04), 0, 1);
@@ -200,13 +220,15 @@ function resize() {
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
   composer.setSize(innerWidth, innerHeight);
+  stage.resize();
   lens.uniforms.uRes.value = [innerWidth * pixelRatio, innerHeight * pixelRatio];
   buildRig();
   readScroll();
 }
 addEventListener('resize', resize);
 
-const ui = initUI();resize();
+const ui = initUI();
+resize();
 scrollP = prevP = scrollTarget;
 
 // compile every program up front so the loader hides real work, not a stutter
@@ -214,7 +236,9 @@ tree.update(0, 0, 1, true);
 sculpture.update(0, 0, true);
 camPath.getPoint(pathU(scrollP), camera.position);
 camera.lookAt(lookPath.getPoint(pathU(scrollP)));
-renderer.compileAsync(scene, camera).catch(() => {}).finally(() => {
+// never let shader compilation hold the loader hostage: cap the wait
+const compiled = renderer.compileAsync(scene, camera).catch(() => {});
+Promise.race([compiled, new Promise((r) => setTimeout(r, 1800))]).then(() => {
   composer.render(0);
   ui.ready();
   clock.start();
