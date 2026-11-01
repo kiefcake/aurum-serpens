@@ -152,9 +152,10 @@ function idleTarget(t, out) {
   const r = 1.25 + h * 0.05;
   tmp.set(TREE_ORIGIN.x + Math.cos(t * 1.25) * r, TREE_ORIGIN.y + h, TREE_ORIGIN.z + Math.sin(t * 1.25) * r);
   out.addScaledVector(tmp, weights.tree);
-  // sculpture: circle the plinth like a guardian
-  tmp.set(SCULPTURE_ORIGIN.x + Math.cos(t * 0.6) * 2.4, SCULPTURE_ORIGIN.y - 0.4 + Math.sin(t * 1.1) * 0.5,
-    SCULPTURE_ORIGIN.z + Math.sin(t * 0.6) * 2.4);
+  // sculpture: circle the foot of the plinth on the gallery floor, like a guardian
+  const gr = 2.75 + Math.sin(t * 0.37) * 0.3;
+  tmp.set(SCULPTURE_ORIGIN.x + Math.cos(t * 0.55) * gr, SCULPTURE_ORIGIN.y - 2.75,
+    SCULPTURE_ORIGIN.z + Math.sin(t * 0.55) * gr);
   out.addScaledVector(tmp, weights.sculpture);
   return out;
 }
@@ -190,12 +191,13 @@ function frame() {
   const reach = camera.position.distanceTo(look) * 0.72;
   const cursorPoint = raycaster.ray.at(reach, tmp.clone());
   // in the hero the cursor steers across the floor rather than through the air
-  if (weights.hero > 0.5 && raycaster.ray.intersectPlane(floorPlane, floorHit) &&
+  floorPlane.constant = weights.sculpture > 0.5 ? -(SCULPTURE_ORIGIN.y - 2.75) : -(HERO_FLOOR + 0.3);
+  if ((weights.hero > 0.5 || weights.sculpture > 0.5) && raycaster.ray.intersectPlane(floorPlane, floorHit) &&
       floorHit.distanceTo(camera.position) < 30) {
-    cursorPoint.lerp(floorHit, THREE.MathUtils.smoothstep(weights.hero, 0.5, 0.9));
+    cursorPoint.lerp(floorHit, THREE.MathUtils.smoothstep(weights.hero + weights.sculpture, 0.5, 0.9));
   }
   target.copy(idleTarget(t, idle)).lerp(cursorPoint, charm);
-  const grounded = THREE.MathUtils.smoothstep(weights.hero, 0.6, 1);
+  const grounded = THREE.MathUtils.smoothstep(weights.hero + weights.sculpture, 0.6, 1);
   serpent.update(dt, t, target, camera.position, grounded);
   serpent.sampleSpine(shadowSamples, shadowSamples.length);
   stage.update(t, weights.hero > 0.01);
