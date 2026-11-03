@@ -23,7 +23,7 @@ const smooth = (a, b, x) => { const t = Math.min(Math.max((x - a) / (b - a), 0),
 // disappears inside the sculpted head mesh.
 function profile(u) {
   return RADIUS * Math.sqrt(smooth(0, 0.05, u)) * (0.75 + 0.25 * smooth(0.03, 0.12, u)) *
-    Math.pow(1 - u, 0.8) * (0.86 + 0.22 * bump(u, 0.36, 0.25));
+    Math.pow(1 - u, 1.15) * (0.92 + 0.42 * bump(u, 0.38, 0.3));
 }
 
 const VERT_HEAD = /* glsl */ `
@@ -42,7 +42,7 @@ vec3 fetchRow(int row, float u){
 float bumpf(float x, float c, float w){ float d = (x - c) / w; return exp(-d * d); }
 float profile(float u){
   return uR * sqrt(smoothstep(0.0, 0.05, u)) * (0.75 + 0.25 * smoothstep(0.03, 0.12, u))
-       * pow(1.0 - u, 0.8) * (0.86 + 0.22 * bumpf(u, 0.36, 0.25));
+       * pow(1.0 - u, 1.15) * (0.92 + 0.42 * bumpf(u, 0.38, 0.3));
 }
 `;
 
@@ -75,20 +75,18 @@ ${BUMP}
 const FRAG_SURFACE = /* glsl */ `
   float along = vSUv.x;
   float head = 0.0;   // the sculpted head mesh covers the front of the tube
-  float rowsN = mix(130.0, 80.0, head);
-  float aroundN = mix(14.0, 11.0, head);
-  vec2 g = vec2(vSUv.y * aroundN, along * rowsN);
-  float row = floor(g.y);
-  float shift = mod(row, 2.0) * 0.5;
-  g.x += shift;
-  vec2 id = vec2(floor(g.x), row);
-  vec2 c = fract(g) - 0.5;
-  vec2 sc = vec2(c.x, c.y + 0.18);
-  float d = length(sc * vec2(1.0, 1.2));
-  // widen the edges with screen-space derivatives so distant scales don't shimmer
-  float aa = clamp(fwidth(g.y) * 1.5, 0.0, 0.5);
-  float dome = 1.0 - smoothstep(0.05, 0.62 + aa, d);
-  float groove = smoothstep(0.44 - aa, 0.54 + aa, d) * (1.0 - smoothstep(0.25, 0.5, aa));
+  // long diamond scales on a rhombic lattice, gently domed, with fine seams
+  float sF = along * 88.0;
+  float around = vSUv.y * 22.0;
+  vec2 lat = vec2(around + sF, around - sF);
+  vec2 id = floor(lat);
+  vec2 c = fract(lat) - 0.5;
+  float edge = max(abs(c.x), abs(c.y)) * 2.0;
+  // widen the seams with screen-space derivatives so distant scales don't shimmer
+  float aa = clamp(fwidth(sF) * 2.2, 0.0, 0.7);
+  float dome = 1.0 - edge * edge;
+  float groove = smoothstep(0.8 - aa, 1.0, edge) * (1.0 - smoothstep(0.25, 0.65, aa));
+  dome *= 1.0 - smoothstep(0.2, 0.65, aa);
 
   // cloisonne motif on continuous coordinates: emerald diamonds in a slim onyx
   // border, each field fenced by a raised gold wire, anti-aliased by fwidth
@@ -109,7 +107,8 @@ const FRAG_SURFACE = /* glsl */ `
   float bellyMask = smoothstep(-0.55, -0.75, cos(vSUv.y * 6.2831853));
   float plate = abs(fract(along * 150.0) - 0.5) * 2.0;
   float plateH = 1.0 - smoothstep(0.75, 1.0, plate);
-  float scales = mix(dome - groove * 0.6, 0.3, enamel) + wire * 0.35;
+  float cab = core * (1.0 - dia / 0.66);
+  float scales = mix(dome * 0.62 - groove * 0.55, 0.3 + (1.0 - (1.0 - cab) * (1.0 - cab)) * 2.4, enamel) + wire * 0.35;
   float h = mix(scales, plateH, bellyMask);
 
   vec3 gold = vec3(1.0, 0.74, 0.36);
@@ -117,7 +116,7 @@ const FRAG_SURFACE = /* glsl */ `
   col *= 1.0 - groove * 0.55 * (1.0 - bellyMask) * (1.0 - enamel);
   col = mix(col, vec3(0.006, 0.006, 0.007), enamel);
   // emerald is brightest at the heart of each stone, like light pooling in thick glass
-  vec3 green = mix(vec3(0.0, 0.05, 0.026), vec3(0.01, 0.2, 0.095), smoothstep(0.62, 0.15, dia));
+  vec3 green = mix(vec3(0.0, 0.06, 0.03), vec3(0.015, 0.3, 0.14), smoothstep(0.62, 0.1, dia));
   col = mix(col, green, emerald);
   col = mix(col, gold * vec3(1.0, 0.92, 0.82), bellyMask);
   diffuseColor.rgb = col;

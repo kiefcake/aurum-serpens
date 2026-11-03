@@ -153,9 +153,9 @@ function buildRig() {
       [T.x, T.y + 6.5 + i * 0.4, T.z]]);
   }
   const [s0, s1] = anchors.sculpture;
-  keys.push([s0, [S.x - 1.5, S.y + 1.0, S.z + 10.5], [S.x, S.y - 0.9, S.z]]);
-  keys.push([s0 + (s1 - s0) * 0.5, [S.x + 3.0, S.y + 0.4, S.z + 7.5], [S.x, S.y - 0.7, S.z]]);
-  keys.push([s1, [S.x + 0.8, S.y + 2.2, S.z + 6.4], [S.x, S.y - 0.6, S.z]]);
+  keys.push([s0, [S.x - 1.6, S.y + 0.9, S.z + 10.8], [S.x, S.y - 0.4, S.z]]);
+  keys.push([s0 + (s1 - s0) * 0.5, [S.x + 2.6, S.y + 0.6, S.z + 8.2], [S.x, S.y - 0.3, S.z]]);
+  keys.push([s1, [S.x + 0.5, S.y + 1.1, S.z + 6.6], [S.x, S.y + 0.15, S.z]]);
   keys.push([1, [S.x, S.y + 20, S.z + 34], [S.x, S.y + 8, S.z]]);
 
   keyP = keys.map((k) => k[0]);

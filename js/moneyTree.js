@@ -19,7 +19,6 @@ function mulberry32(a) {
 }
 
 const MAX_DEPTH = 5;
-const SIDES = 10;
 
 // ------------------------------------------------------------------ coin face
 // Height map for the coin caps: raised rim, raised frame around the square hole
@@ -75,9 +74,14 @@ attribute float aBirth;
 attribute float aPrevBirth;
 attribute float aPrev2Birth;
 attribute float aRadius;
+attribute float aBaseR;
+attribute vec3 aDir;
+attribute vec3 aBark;
 uniform float uGrowth;
 uniform float uTime;
 varying vec3 vWPos;
+varying vec3 vBark;
+varying float vBaseR;
 ${SWAY}
 `;
 const BARK_VERT = /* glsl */ `
@@ -96,32 +100,44 @@ const BARK_VERT = /* glsl */ `
     c = mix(aPrev2, aPrev, t);
     thick = 0.0;
   }
-  vec3 transformed = c + swayOffset(c, uTime) + normal * aRadius * thick;
+  vec3 transformed = c + swayOffset(c, uTime) + aDir * aRadius * thick;
   vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+  vBark = aBark;
+  vBaseR = aBaseR;
 `;
 const BARK_FRAG_HEAD = /* glsl */ `
 uniform float uTime;
 varying vec3 vWPos;
+varying vec3 vBark;
+varying float vBaseR;
 ${NOISE}
 ${BUMP}
 `;
 const BARK_FRAG = /* glsl */ `
-  float n1 = fbm(vWPos * 1.3);
-  float n2 = fbm(vWPos * vec3(4.0, 1.0, 4.0));
-  // verdigris gathers in the bark furrows and in broad weathered patches;
-  // the raised ridges stay rubbed back to bronze. Grooves narrower than a pixel
-  // fade to their average instead of aliasing into sparkle at a distance.
-  float fq = n2 * 9.0;
-  float aa = 1.0 - smoothstep(0.3, 1.0, fwidth(fq));
-  float furrow = mix(0.36, 1.0 - abs(sin(fq)), aa);
-  float patina = clamp(smoothstep(0.48, 0.7, n1) + smoothstep(0.55, 0.95, furrow) * 0.8, 0.0, 1.0);
-  float vein = smoothstep(0.018, 0.0, abs(fbm(vWPos * 0.9 + 3.0) - 0.5)) * (1.0 - patina);
-  vec3 bronze = vec3(0.56, 0.34, 0.17) * (0.85 + 0.3 * n2);
-  vec3 verd = mix(vec3(0.05, 0.22, 0.19), vec3(0.3, 0.56, 0.47), smoothstep(0.3, 0.8, fbm(vWPos * 3.0 + 5.0)));
-  diffuseColor.rgb = mix(mix(bronze, verd, patina), ${GOLD}, vein);
-  float sMetal = mix(mix(0.92, 0.0, patina), 1.0, vein);
-  float sRough = mix(mix(0.34, 0.85, patina), 0.14, vein);
-  float sHeight = ((1.0 - furrow) * 0.7 + patina * 0.25) * aa - vein * 0.4;
+  // cast-bronze bark: ridges that run with the limb, whichever way it grows
+  vec3 bp = vBark * vec3(6.5, 6.5, 1.15);
+  float warp = vnoise(bp * 0.45 + 3.0);
+  float r1 = 1.0 - abs(2.0 * vnoise(bp + warp * 1.6) - 1.0);
+  float r2 = 1.0 - abs(2.0 * vnoise(bp * 2.3 + 7.0 + warp) - 1.0);
+  // ridges finer than a pixel fade to their average instead of sparkling
+  float aa = 1.0 - smoothstep(0.35, 1.1, length(fwidth(bp)));
+  float ridge = mix(0.62, r1 * r1 * 0.72 + r2 * r2 * 0.28, aa);
+  float furrow = 1.0 - ridge;
+  float n1 = fbm(vWPos * 1.1);
+  // verdigris settles in the furrows and in broad weathered patches; the ridges
+  // stay rubbed back to bronze, and the limbs turn to pure gold toward their tips
+  float patina = clamp(smoothstep(0.5, 0.72, n1) * 0.85 + smoothstep(0.5, 0.78, furrow) * 0.65, 0.0, 1.0);
+  float gild = smoothstep(0.17, 0.05, vBaseR);
+  patina *= 1.0 - gild;
+  float vein = smoothstep(0.016, 0.0, abs(fbm(vWPos * 0.9 + 3.0) - 0.5)) * (1.0 - patina) * (1.0 - gild);
+  vec3 bronze = mix(vec3(0.32, 0.17, 0.08), vec3(0.72, 0.45, 0.22), ridge);
+  vec3 verd = mix(vec3(0.035, 0.17, 0.15), vec3(0.3, 0.58, 0.48), smoothstep(0.3, 0.8, fbm(vWPos * 3.0 + 5.0)));
+  verd *= 0.55 + 0.6 * ridge;
+  vec3 metalCol = mix(bronze, vec3(1.0, 0.72, 0.34), gild);
+  diffuseColor.rgb = mix(mix(metalCol, verd, patina), ${GOLD}, vein);
+  float sMetal = mix(mix(0.95, 0.0, patina), 1.0, vein);
+  float sRough = mix(mix(mix(0.38, 0.2, gild), 0.82, patina), 0.14, vein);
+  float sHeight = ridge * (1.0 - gild * 0.8) - vein * 0.3;
   float pulse = pow(0.5 + 0.5 * sin(vWPos.y * 1.2 - uTime * 2.0), 12.0);
 `;
 
@@ -287,7 +303,7 @@ export class MoneyTree {
       pts.push(p.clone().addScaledVector(d, rad * 0.4));
       radii.push(0.001);
       births.push(births[births.length - 1] + rad * 0.4);
-      branches.push({ pts, radii, births });
+      branches.push({ pts, radii, births, depth, root: !!opts.root });
       if (opts.root) return;
 
       if (depth >= MAX_DEPTH - 2) {
@@ -351,44 +367,94 @@ export class MoneyTree {
   }
 
   _buildBark(branches, maxBirth) {
-    const P = [], Nrm = [], C = [], Pr = [], Pr2 = [], Bi = [], PB = [], PB2 = [], Rad = [], idx = [];
+    const P = [], Nrm = [], C = [], Pr = [], Pr2 = [], Bi = [], PB = [], PB2 = [], Rad = [], Base = [], Dir = [], Bark = [], idx = [];
     let vbase = 0;
+    const lerp = (arr, f) => {
+      const i = Math.min(Math.floor(f), arr.length - 2);
+      return arr[i] + (arr[i + 1] - arr[i]) * (f - i);
+    };
+    const a_ = new THREE.Vector3(), b_ = new THREE.Vector3(), n_ = new THREE.Vector3();
     for (const b of branches) {
-      const n = b.pts.length;
-      let T = new THREE.Vector3().subVectors(b.pts[1], b.pts[0]).normalize();
+      // resample each limb along a smooth curve: thick limbs get far more detail
+      const curve = new THREE.CatmullRomCurve3(b.pts, false, 'centripetal');
+      const rings = b.root ? 30 : [72, 40, 24, 14, 12, 10][b.depth];
+      const sides = b.root ? 18 : [44, 26, 16, 10, 8, 6][b.depth];
+      const n = rings;
+      const pts = [], radii = [], births = [];
+      const span = b.pts.length - 1;
+      const len = b.pts.reduce((sum, p, i) => (i ? sum + p.distanceTo(b.pts[i - 1]) : 0), 0);
+      for (let i = 0; i < n; i++) {
+        const u = i / (n - 1);
+        pts.push(curve.getPoint(u));
+        radii.push(lerp(b.radii, u * span));
+        births.push(lerp(b.births, u * span));
+      }
+      let T = new THREE.Vector3().subVectors(pts[1], pts[0]).normalize();
       const Nn = new THREE.Vector3(1, 0, 0);
       Nn.addScaledVector(T, -Nn.dot(T));
       if (Nn.lengthSq() < 0.01) Nn.set(0, 0, 1).addScaledVector(T, -T.z);
       Nn.normalize();
+      // muscles of metal twisting round the limb; heavy on the trunk, gone on twigs
+      const lobeK = b.root ? 0.16 : [0.2, 0.13, 0.07, 0.03, 0, 0][b.depth];
+      const grid = [];
+      const arcSeed = b.pts[0].x * 7.3 + b.pts[0].z * 3.1 + b.depth * 11;
+      const first = P.length / 3;
       for (let i = 0; i < n; i++) {
-        const a = b.pts[Math.max(i - 1, 0)], c = b.pts[Math.min(i + 1, n - 1)];
+        const u = i / (n - 1);
+        const a = pts[Math.max(i - 1, 0)], c = pts[Math.min(i + 1, n - 1)];
         T = new THREE.Vector3().subVectors(c, a).normalize();
         Nn.addScaledVector(T, -Nn.dot(T)).normalize();
         const B = new THREE.Vector3().crossVectors(T, Nn);
-        const prev = b.pts[Math.max(i - 1, 0)], prev2 = b.pts[Math.max(i - 2, 0)];
-        const birth = b.births[i] / maxBirth;
-        const pb = i > 0 ? b.births[i - 1] / maxBirth : birth - 1e-4;
-        const pb2 = i > 1 ? b.births[i - 2] / maxBirth : pb - 1e-4;
-        for (let j = 0; j <= SIDES; j++) {
-          const ang = (j / SIDES) * Math.PI * 2;
+        const prev = pts[Math.max(i - 1, 0)], prev2 = pts[Math.max(i - 2, 0)];
+        const birth = births[i] / maxBirth;
+        const pb = i > 0 ? births[i - 1] / maxBirth : birth - 1e-4;
+        const pb2 = i > 1 ? births[i - 2] / maxBirth : pb - 1e-4;
+        const tw = u * len * 1.25 + b.depth * 1.7;
+        // buttress flare at the foot of the trunk; a collar where a limb leaves its parent
+        const flare = !b.root && b.depth === 0 ? Math.max(0, 1 - u / 0.3) ** 2 : 0;
+        const collar = !b.root && b.depth > 0 ? Math.max(0, 1 - u / 0.14) ** 2 * 0.16 : 0;
+        const row = [];
+        for (let j = 0; j <= sides; j++) {
+          const ang = (j / sides) * Math.PI * 2;
           const dir = Nn.clone().multiplyScalar(Math.cos(ang)).addScaledVector(B, Math.sin(ang));
-          const p = b.pts[i];
-          P.push(p.x + dir.x * b.radii[i], p.y + dir.y * b.radii[i], p.z + dir.z * b.radii[i]);
+          const lobes = 0.6 * Math.sin(5 * ang + tw) + 0.4 * Math.sin(3 * ang - tw * 0.7 + 1) + 0.22 * Math.sin(9 * ang + tw * 1.8);
+          const buttress = flare * (0.75 + 1.1 * Math.max(0, Math.sin(5 * ang + tw)) ** 2);
+          const r = radii[i] * (1 + lobeK * lobes * (1 - 0.6 * flare)) * (1 + buttress + collar);
+          const p = pts[i];
+          row.push(new THREE.Vector3(p.x + dir.x * r, p.y + dir.y * r, p.z + dir.z * r));
+          P.push(p.x + dir.x * r, p.y + dir.y * r, p.z + dir.z * r);
+          Dir.push(dir.x, dir.y, dir.z);
           Nrm.push(dir.x, dir.y, dir.z);
+          Bark.push(Math.cos(ang) * r, Math.sin(ang) * r, u * len + arcSeed);
           C.push(p.x, p.y, p.z);
           Pr.push(prev.x, prev.y, prev.z);
           Pr2.push(prev2.x, prev2.y, prev2.z);
           Bi.push(birth); PB.push(pb); PB2.push(pb2);
-          Rad.push(b.radii[i]);
+          Rad.push(r);
+          Base.push(radii[i]);
+        }
+        grid.push(row);
+      }
+      // true surface normals of the modelled limb
+      for (let i = 0; i < n; i++) {
+        for (let j = 0; j <= sides; j++) {
+          a_.subVectors(grid[Math.min(i + 1, n - 1)][j], grid[Math.max(i - 1, 0)][j]);
+          b_.subVectors(grid[i][(j + 1) % sides], grid[i][(j - 1 + sides) % sides]);
+          n_.crossVectors(a_, b_);
+          const k = (first + i * (sides + 1) + j) * 3;
+          if (n_.lengthSq() < 1e-14) continue;
+          n_.normalize();
+          if (n_.x * Dir[k] + n_.y * Dir[k + 1] + n_.z * Dir[k + 2] < 0) n_.negate();
+          Nrm[k] = n_.x; Nrm[k + 1] = n_.y; Nrm[k + 2] = n_.z;
         }
       }
       for (let i = 0; i < n - 1; i++) {
-        for (let j = 0; j < SIDES; j++) {
-          const a = vbase + i * (SIDES + 1) + j, c = a + SIDES + 1;
+        for (let j = 0; j < sides; j++) {
+          const a = vbase + i * (sides + 1) + j, c = a + sides + 1;
           idx.push(a, a + 1, c, c, a + 1, c + 1);
         }
       }
-      vbase += n * (SIDES + 1);
+      vbase += n * (sides + 1);
     }
     const g = new THREE.BufferGeometry();
     const f3 = (a) => new THREE.Float32BufferAttribute(a, 3);
@@ -402,6 +468,9 @@ export class MoneyTree {
     g.setAttribute('aPrevBirth', f1(PB));
     g.setAttribute('aPrev2Birth', f1(PB2));
     g.setAttribute('aRadius', f1(Rad));
+    g.setAttribute('aBaseR', f1(Base));
+    g.setAttribute('aDir', f3(Dir));
+    g.setAttribute('aBark', f3(Bark));
     g.setIndex(idx);
 
     const mat = physical({ color: 0xffffff, metalness: 1, roughness: 0.4, side: THREE.DoubleSide }, {

@@ -40,6 +40,7 @@ void main(){
     float rq = clamp(br - uThreshold + uKnee, 0.0, 2.0 * uKnee);
     rq = rq * rq / (4.0 * uKnee + 1e-4);
     col *= max(rq, br - uThreshold) / max(br, 1e-4);
+    if (any(isnan(col)) || any(isinf(col))) col = vec3(0.0);
   } else {
     col = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 + (j + k + l + m) * 0.125;
   }
