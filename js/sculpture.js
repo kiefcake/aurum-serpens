@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { NOISE, ENV, GOLD } from './glsl.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { groundFragment } from './moneyTree.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { patch } from './studio.js';
 
 // A raymarched marble ouroboros on a fluted plinth, repaired with kintsugi gold.
@@ -46,6 +47,9 @@ uniform mat4 uModel;
 uniform mat4 uProj;
 uniform vec3 uHalf;
 uniform vec3 uLight;
+uniform sampler2D tHall;
+uniform float uHallOn;
+uniform float uHallGain;
 varying vec3 vWorld;
 #define PI 3.14159265
 #define TAU 6.2831853
@@ -266,6 +270,14 @@ vec3 hallEnv(vec3 r){
   return c;
 }
 
+// the photographed rotunda (an equirectangular HDRI), once it has loaded;
+// the warm shaft overhead is the scene's own light and stays on top of it
+vec3 env(vec3 r){
+  if (uHallOn < 0.5) return hallEnv(r);
+  vec2 uv = vec2(atan(r.z, r.x) * (0.5 / PI) + 0.5, asin(clamp(r.y, -1.0, 1.0)) / PI + 0.5);
+  return texture2D(tHall, uv).rgb * uHallGain + vec3(3.2, 2.7, 2.1) * 0.6 * smoothstep(0.86, 0.985, r.y);
+}
+
 vec3 marbleColor(vec3 tp){
   float w = fbm(tp * 1.3);
   float v1 = pow(1.0 - abs(sin((tp.x * 1.1 + tp.y * 0.7 + tp.z * 0.5 + w * 4.5) * 2.3)), 10.0);
@@ -314,13 +326,13 @@ void main(){
   vec3 goldUp = vec3(1.0, 0.62, 0.24) * max(-nw.y * 0.75 + 0.25, 0.0) * lift;
 
   if (m > 2.5){
-    col = g * (hallEnv(R_) * 0.8 + studioEnv(R_) * 0.5) + g * diff * 0.5;
+    col = g * (env(R_) * 0.8 + studioEnv(R_) * 0.5) + g * diff * 0.5;
   } else if (m > 1.5){
     // emerald cabochon: dark at the heart, lit through the far side, one sharp glint
     float through = pow(1.0 - ndv, 2.0);
     col = mix(vec3(0.0, 0.1, 0.05), vec3(0.04, 0.85, 0.42), through) + vec3(0.02, 0.5, 0.25) * (0.5 + 0.5 * sin(uTime * 0.7));
     col *= 0.6 + 0.4 * sh;
-    col += (0.05 + 0.95 * fres) * hallEnv(R_) + pow(ndh, 400.0) * 5.0 * sh;
+    col += (0.05 + 0.95 * fres) * env(R_) + pow(ndh, 400.0) * 5.0 * sh;
   } else if (m > 0.5){
     // Nero Marquina: polished black stone with white and gold veining
     float w = fbm(p * 1.6 + 11.0);
@@ -331,7 +343,7 @@ void main(){
     float ring = top * (1.0 - smoothstep(0.012, 0.02, abs(length(p.xz) - 0.84)));
     float isGold = max(vg, ring);
     col = base * (diff * vec3(0.9, 0.84, 0.76) + vec3(0.1, 0.11, 0.13) * ao) + base * goldUp * 0.35;
-    vec3 refl = hallEnv(R_) * ao;
+    vec3 refl = env(R_) * ao;
     // the polished top truly mirrors the knot floating above it
     if (top > 0.5 && n.y > 0.8){
       vec3 rr = reflect(rd, n);
@@ -349,7 +361,7 @@ void main(){
     }
     float F = 0.055 + 0.945 * fres;
     col += refl * F + pow(ndh, 240.0) * 0.8 * sh;
-    vec3 goldCol = g * (hallEnv(R_) + studioEnv(R_) * 0.55) * 0.75 + g * diff * 0.35;
+    vec3 goldCol = g * (env(R_) + studioEnv(R_) * 0.55) * 0.75 + g * diff * 0.35;
     goldCol += g * ring * (1.5 + 0.5 * sin(uTime * 0.9));
     col = mix(col, goldCol, isGold);
   } else {
@@ -394,11 +406,11 @@ void main(){
           + goldUp * 0.7 * ao);
     col += marble * vec3(1.0, 0.66, 0.46) * wrap * thin * 0.5;
     float F = 0.045 + 0.955 * fres;
-    col += hallEnv(R_) * F * mix(0.35, 1.0, ao) * (1.0 - cavity * 0.7);
+    col += env(R_) * F * mix(0.35, 1.0, ao) * (1.0 - cavity * 0.7);
     col += pow(ndh, 180.0) * 0.55 * sh * (1.0 - cavity);
     col += vec3(0.3, 0.38, 0.55) * pow(1.0 - ndv, 3.0) * 0.16 * ao;
 
-    vec3 goldCol = g * (hallEnv(R_) * 0.9 + studioEnv(R_) * 0.55) + g * diff * 0.5 + goldUp * g * 0.35;
+    vec3 goldCol = g * (env(R_) * 0.9 + studioEnv(R_) * 0.55) + g * diff * 0.5 + goldUp * g * 0.35;
     goldCol += g * 0.22 * (0.7 + 0.3 * sin(uTime * 1.3 + (b.y - uFlow) * 2.0));
     col = mix(col, goldCol, gold);
   }
@@ -454,6 +466,9 @@ export class Sculpture {
       uProj: { value: new THREE.Matrix4() },
       uHalf: { value: HALF },
       uLight: { value: new THREE.Vector3(0.45, 0.9, 0.35).normalize() },
+      tHall: { value: null },
+      uHallOn: { value: 0 },
+      uHallGain: { value: 1 },
     };
     const box = new THREE.BoxGeometry(HALF.x * 2, HALF.y * 2, HALF.z * 2);
     this.proxy = new THREE.Mesh(box, new THREE.ShaderMaterial({
@@ -494,6 +509,9 @@ export class Sculpture {
 
     this.colonnade = this._buildColonnade(origin);
     scene.add(this.colonnade);
+    this.origin = origin.clone();
+    this.props = new THREE.Group();
+    scene.add(this.props);
 
     this.rotation = 0;
     this.velocity = 0;
@@ -556,9 +574,64 @@ export class Sculpture {
   }
 
   // the colonnade is the gallery's room: it leaves once the camera pulls out for the coda
+  // The gallery's light: the raw panorama for the raymarched stone, and its
+  // prefiltered version for everything rasterised in the room
+  setHall(equirect, envMap) {
+    this.uniforms.tHall.value = equirect;
+    this.uniforms.uHallOn.value = 1;
+    this.uniforms.uHallGain.value = 0.55;
+    this.hallEnv = envMap;
+    this.colonnade.material.envMap = envMap;
+    this.colonnade.material.envMapIntensity = 0.55;
+    this.colonnade.material.needsUpdate = true;
+  }
+
+  // Photogrammetry scans (Poly Haven, CC0): marble busts and brass vases on
+  // black marble pedestals between the columns, behind the sculpture
+  async loadProps() {
+    const loader = new GLTFLoader();
+    const load = (name) => loader.loadAsync(`assets/models/${name}/${name}_1k.gltf`).then((g) => g.scene);
+    const [bust, vase] = await Promise.all([load('marble_bust_01'), load('brass_vase_01')]);
+    const fade = (mat) => {
+      mat.envMap = this.hallEnv || null;
+      mat.envMapIntensity = 0.9;
+      mat.onBeforeCompile = (shader) => {
+        shader.uniforms.uRoomFade = this.roomFade;
+        shader.fragmentShader = patch(shader.fragmentShader, [
+          ['#include <common>', '#include <common>\nuniform float uRoomFade;'],
+          ['#include <opaque_fragment>', 'outgoingLight *= uRoomFade;\n#include <opaque_fragment>'],
+        ]);
+      };
+    };
+    bust.traverse((o) => { if (o.isMesh) fade(o.material); });
+    vase.traverse((o) => { if (o.isMesh) { fade(o.material); o.material.envMapIntensity = 1.3; } });
+
+    const pedMat = new THREE.MeshStandardMaterial({ color: 0x0b0b0d, roughness: 0.14, metalness: 0 });
+    fade(pedMat);
+    const pedGeo = mergeGeometries([
+      new THREE.CylinderGeometry(0.42, 0.42, 1.5, 48).translate(0, 0.75, 0),
+      new THREE.CylinderGeometry(0.52, 0.52, 0.1, 48).translate(0, 0.05, 0),
+      new THREE.CylinderGeometry(0.5, 0.5, 0.08, 48).translate(0, 1.54, 0),
+    ]);
+    const COLS = 14, R = 12.2, floorY = this.origin.y - 3.03;
+    // the bays straight behind the sculpture, as the camera sees it
+    [-2, -1, 0, 1].forEach((k, i) => {
+      const a = -Math.PI / 2 + (k / COLS) * Math.PI * 2 + 0.11;
+      const x = this.origin.x + Math.cos(a) * R, z = this.origin.z + Math.sin(a) * R;
+      const ped = new THREE.Mesh(pedGeo, pedMat);
+      ped.position.set(x, floorY, z);
+      const item = (i % 2 === 0 ? bust : vase).clone();
+      item.scale.setScalar(i % 2 === 0 ? 2.5 : 2.1);
+      item.position.set(x, floorY + 1.58, z);
+      // face the centre of the room
+      item.rotation.y = Math.atan2(this.origin.x - x, this.origin.z - z);
+      this.props.add(ped, item);
+    });
+  }
+
   update(dt, time, visible, room = 1) {
     this.group.visible = this.shaft.visible = this.floor.visible = visible;
-    this.colonnade.visible = visible && room > 0.01;
+    this.colonnade.visible = this.props.visible = visible && room > 0.01;
     this.roomFade.value = room;
     // a slow sway keeps the knot's face toward the viewer; a drag spins it and
     // it drifts back to the nearest full turn

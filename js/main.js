@@ -8,6 +8,7 @@ import { MoneyTree } from './moneyTree.js';
 import { Sculpture } from './sculpture.js';
 import { Atmosphere } from './atmosphere.js';
 import { Stage } from './stage.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
 import { createStudioEnvironment } from './studio.js';
 import { FinalShader } from './finalPass.js';
 import { initUI } from './ui.js';
@@ -46,7 +47,7 @@ const sculpture = new Sculpture(scene, SCULPTURE_ORIGIN);
 const serpent = new Serpent(scene);
 const stage = new Stage(scene, HERO_FLOOR);
 const shadowSamples = stage.shadowSamples;
-stage.hideInReflection.push(tree.group, sculpture.group, sculpture.shaft, sculpture.floor, sculpture.colonnade, atmosphere.motes);
+stage.hideInReflection.push(tree.group, sculpture.group, sculpture.shaft, sculpture.floor, sculpture.colonnade, sculpture.props, atmosphere.motes);
 
 const composer = new EffectComposer(renderer, new THREE.WebGLRenderTarget(innerWidth * pixelRatio, innerHeight * pixelRatio, {
   type: THREE.HalfFloatType,
@@ -383,9 +384,44 @@ camPath.getPoint(pathU(scrollP), camera.position);
 camera.lookAt(lookPath.getPoint(pathU(scrollP)));
 weights = stationWeights(scrollP);
 serpent.place(idleTarget(0, idle));
+// Photographed light (Poly Haven HDRIs, CC0): a dark softbox studio lights every
+// polished material; a colonnaded rotunda lights the gallery. The procedural
+// studio above stays in place if either fails to arrive.
+// Jewellery is shot in a black room: keep the HDRI's real softboxes, sink its
+// grey walls, and soft-clip the lamps (they peak in the hundreds) so gold
+// highlights stay gold instead of tone-mapping to white.
+function blackStudio(tex) {
+  const d = tex.image.data, H = THREE.DataUtils;
+  const tint = [1.0, 0.9, 0.76], knee = 3, ceiling = 12;
+  for (let i = 0; i < d.length; i += 4) {
+    const c = [H.fromHalfFloat(d[i]), H.fromHalfFloat(d[i + 1]), H.fromHalfFloat(d[i + 2])];
+    const L = Math.max(c[0], c[1], c[2], 1e-6);
+    let k = 0.1 + 0.9 * THREE.MathUtils.smoothstep(L, 1.0, 4.0);
+    const Lk = L * k;
+    if (Lk > knee) k *= (knee + (Lk - knee) / (1 + (Lk - knee) / (ceiling - knee))) / Lk;
+    for (let j = 0; j < 3; j++) d[i + j] = H.toHalfFloat(c[j] * k * tint[j]);
+  }
+  tex.needsUpdate = true;
+  return tex;
+}
+const capped = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
+async function loadPhotographedLight() {
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  const hdr = (name) => new RGBELoader().loadAsync(`assets/hdri/${name}_1k.hdr`);
+  const [studio, hall] = await Promise.all([hdr('studio_small_09'), hdr('sepulchral_chapel_rotunda')]);
+  scene.environment = pmrem.fromEquirectangular(blackStudio(studio)).texture;
+  scene.environmentIntensity = 1.0;
+  scene.environmentRotation.y = 1.9;
+  studio.dispose();
+  sculpture.setHall(hall, pmrem.fromEquirectangular(hall).texture);
+  pmrem.dispose();
+  await sculpture.loadProps();
+}
+const assets = capped(loadPhotographedLight().catch((e) => console.warn('assets', e)), 6000);
+
 // never let shader compilation hold the loader hostage: cap the wait
-const compiled = renderer.compileAsync(scene, camera).catch(() => {});
-Promise.race([compiled, new Promise((r) => setTimeout(r, 1800))]).then(() => {
+const compiled = assets.then(() => renderer.compileAsync(scene, camera)).catch(() => {});
+Promise.race([compiled, new Promise((r) => setTimeout(r, 7000))]).then(() => {
   composer.render(0);
   ui.ready();
   clock.start();
